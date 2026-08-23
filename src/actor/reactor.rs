@@ -430,7 +430,6 @@ pub struct Reactor {
     space_activation_policy: SpaceActivationPolicy,
     main_window_tracker: MainWindowTracker,
     pending_mouse_focus: Option<(WindowId, Instant)>,
-    native_tab_focus_manager: managers::NativeTabFocusManager,
     drag_manager: managers::DragManager,
     workspace_switch_manager: managers::WorkspaceSwitchManager,
     recording_manager: managers::RecordingManager,
@@ -520,7 +519,6 @@ impl Reactor {
             space_activation_policy: SpaceActivationPolicy::new(),
             main_window_tracker: MainWindowTracker::default(),
             pending_mouse_focus: None,
-            native_tab_focus_manager: managers::NativeTabFocusManager::default(),
             drag_manager: managers::DragManager {
                 actor: crate::actor::drag::DragActor::new(config.settings.drag_drop),
                 native_motion_active: std::sync::Arc::default(),
@@ -1320,12 +1318,10 @@ impl Reactor {
                 return Ok(outcome);
             }
             Event::ApplicationTerminated(pid) => {
-                self.native_tab_focus_manager.clear_for_app(pid);
                 return application_workflow::handle_application_terminated(pid);
             }
             Event::ApplicationThreadTerminated(pid) => {
                 self.forget_window_inventory(pid);
-                self.native_tab_focus_manager.clear_for_app(pid);
                 self.clear_menu_state_for_pid(pid);
                 return application_workflow::handle_application_thread_terminated(
                     &mut self.state,
@@ -1358,21 +1354,6 @@ impl Reactor {
             }
             Event::ApplicationGloballyDeactivated(pid) => {
                 self.clear_menu_state_for_pid(pid);
-                if let Some(guard) =
-                    self.native_tab_focus_manager.take_for_deactivation(pid, Instant::now())
-                    && self
-                        .state
-                        .windows
-                        .window(guard.window)
-                        .is_some_and(|window| window.info.sys_id == Some(guard.window_server_id))
-                {
-                    trace!(
-                        window = ?guard.window,
-                        "Restoring frontmost app after native-tab handoff"
-                    );
-                    return Ok(EventOutcome::focus_changed(None, should_update_notifications)
-                        .with_make_key_window(pid, guard.window_server_id));
-                }
             }
             Event::ApplicationGloballyActivated(pid) => {
                 if duplicate_global_activation {
@@ -1431,19 +1412,7 @@ impl Reactor {
                     },
                 )?;
                 if outcome.focused_window == Some(current) {
-                    let was_globally_frontmost =
-                        self.main_window_tracker.is_globally_frontmost(current.pid);
                     self.main_window_tracker.confirm_native_tab_focus(current);
-                    if was_globally_frontmost
-                        && let Some(window_server_id) =
-                            self.state.windows.window(current).and_then(|window| window.info.sys_id)
-                    {
-                        self.native_tab_focus_manager.arm(
-                            current,
-                            window_server_id,
-                            Instant::now(),
-                        );
-                    }
                 }
                 return Ok(outcome);
             }
@@ -1512,7 +1481,6 @@ impl Reactor {
                 return Ok(outcome);
             }
             Event::WindowDestroyed(wid) => {
-                self.native_tab_focus_manager.clear_for_window(wid);
                 // macOS can replace AXUIElements during lifecycle/display churn while the
                 // native window remains alive. Recovery already schedules a stable refresh,
                 // so preserve topology until then. Outside churn, retain the original AX
