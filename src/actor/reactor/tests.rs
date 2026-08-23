@@ -4081,46 +4081,6 @@ fn native_tab_focus_replaces_the_existing_layout_slot() {
 }
 
 #[test]
-fn native_tab_focus_guard_restores_frontmost_app_on_immediate_deactivation() {
-    let (mut apps, mut reactor) = test_context();
-    let screen = CGRect::new(CGPoint::new(0., 0.), CGSize::new(1000., 1000.));
-    let space = SpaceId::new(1);
-    let previous = WindowId::new(1, 1);
-    let current = WindowId::new(1, 2);
-    let current_wsid = WindowServerId::new(10_002);
-
-    reactor.handle_event(space_state_event(vec![screen], vec![Some(space)]));
-    make_active_app(&mut apps, &mut reactor, 1, make_windows(1), Some(previous));
-    let frame = reactor.state.windows.window(previous).expect("previous tab").frame_monotonic;
-
-    let native_tab_outcome = reactor
-        .dispatch_workflow(Event::NativeTabFocused {
-            previous,
-            current,
-            window: make_window_info(frame, Some(current_wsid), "Tab 2", Some("com.testapp1")),
-            window_server_info: Some(WindowServerInfo {
-                id: current_wsid,
-                pid: current.pid,
-                layer: 0,
-                frame,
-                min_frame: CGSize::ZERO,
-                max_frame: CGSize::ZERO,
-            }),
-        })
-        .expect("native tab transition");
-    reactor.apply_event_outcome(native_tab_outcome);
-
-    let deactivation_outcome = reactor
-        .dispatch_workflow(Event::ApplicationGloballyDeactivated(current.pid))
-        .expect("global deactivation");
-
-    assert_eq!(deactivation_outcome.make_key_windows, vec![(
-        current.pid,
-        current_wsid
-    )]);
-}
-
-#[test]
 fn native_tab_focus_can_switch_back_to_a_previously_hidden_tab() {
     let (mut apps, mut reactor) = test_context();
     let screen = CGRect::new(CGPoint::new(0., 0.), CGSize::new(1000., 1000.));
@@ -4201,13 +4161,6 @@ fn stale_native_tab_transition_cannot_restore_an_intermediate_tab() {
     assert!(!reactor.state.windows.contains_window(first));
     assert!(!reactor.state.windows.contains_window(second));
     assert!(reactor.state.windows.contains_window(third));
-
-    let deactivation_outcome = reactor
-        .dispatch_workflow(Event::ApplicationGloballyDeactivated(third.pid))
-        .expect("global deactivation");
-    assert_eq!(deactivation_outcome.make_key_windows, vec![(
-        third.pid, third_wsid
-    )]);
 }
 
 #[test]

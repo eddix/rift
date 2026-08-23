@@ -125,9 +125,54 @@ const WINDOW_ANIMATION_NOTIFICATIONS: &[AxNotificationKind] = &[
 ];
 
 const NATIVE_TAB_FRAME_TOLERANCE: f64 = 2.0;
+// Native tab handoff can deactivate its owner tens of milliseconds after AX
+// focus settles. Keep the repair window short enough not to mask an intentional
+// application switch immediately after the tab shortcut.
+const NATIVE_TAB_FOCUS_GUARD_DURATION: Duration = Duration::from_millis(120);
 
 pub(crate) fn native_tab_frames_match(previous: CGRect, current: CGRect) -> bool {
     previous.is_within(NATIVE_TAB_FRAME_TOLERANCE, current)
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct NativeTabFocusGuard {
+    window: WindowId,
+    window_server_id: WindowServerId,
+    expires_at: Instant,
+}
+
+#[derive(Default)]
+struct NativeTabFocusManager {
+    guard: Option<NativeTabFocusGuard>,
+}
+
+impl NativeTabFocusManager {
+    fn arm(&mut self, window: WindowId, window_server_id: WindowServerId, now: Instant) {
+        self.guard = Some(NativeTabFocusGuard {
+            window,
+            window_server_id,
+            expires_at: now + NATIVE_TAB_FOCUS_GUARD_DURATION,
+        });
+    }
+
+    fn take_for_deactivation(
+        &mut self,
+        main_window: Option<WindowId>,
+        now: Instant,
+    ) -> Option<NativeTabFocusGuard> {
+        let guard = self.guard?;
+        if now > guard.expires_at || main_window != Some(guard.window) {
+            self.guard = None;
+            return None;
+        }
+        self.guard.take()
+    }
+
+    fn clear_for_window(&mut self, window: WindowId) {
+        if self.guard.is_some_and(|guard| guard.window == window) {
+            self.guard = None;
+        }
+    }
 }
 
 /// An identifier representing a window.
@@ -433,6 +478,7 @@ struct State {
     last_window_idx: u32,
     main_window: Option<WindowId>,
     native_tab_window: Option<WindowId>,
+    native_tab_focus_manager: NativeTabFocusManager,
     last_activated: Option<(Instant, Quiet, Option<WindowId>, oneshot::Sender<()>)>,
     pending_activation_quiet: Option<(Instant, Quiet)>,
     is_hidden: bool,
@@ -1534,6 +1580,11 @@ impl State {
         };
 
         if previous != current && native_tab_frames_match(previous_frame, info.frame) {
+            if (self.is_frontmost || self.app.frontmost().unwrap_or(false))
+                && let Some(window_server_id) = info.sys_id
+            {
+                self.native_tab_focus_manager.arm(current, window_server_id, Instant::now());
+            }
             // Native tabs are separate AX windows. Keep the hidden tab registered
             // here so a later switch can restore its identity and layout slot.
             self.send_event(Event::NativeTabFocused {
@@ -1619,6 +1670,22 @@ impl State {
         );
 
         if !is_frontmost {
+            if let Some(guard) = self
+                .native_tab_focus_manager
+                .take_for_deactivation(self.main_window, Instant::now())
+            {
+                match window_server::make_key_window(self.pid, guard.window_server_id) {
+                    Ok(()) => info!(
+                        window = ?guard.window,
+                        "Restored frontmost app after native-tab handoff"
+                    ),
+                    Err(error) => warn!(
+                        window = ?guard.window,
+                        ?error,
+                        "Failed to restore frontmost app after native-tab handoff"
+                    ),
+                }
+            }
             self.pending_activation_quiet = None;
             if old_frontmost {
                 self.send_event(Event::ApplicationDeactivated(self.pid));
@@ -2099,6 +2166,7 @@ impl State {
     fn remove_window(&mut self, wid: WindowId) -> Option<AppWindowState> {
         let window = self.windows.remove(&wid)?;
         self.elem_to_wid.remove(&window.elem);
+        self.native_tab_focus_manager.clear_for_window(wid);
         if self.native_tab_window == Some(wid) {
             self.native_tab_window = None;
         }
@@ -2201,6 +2269,7 @@ fn app_thread_main(
         last_window_idx: 0,
         main_window: None,
         native_tab_window: None,
+        native_tab_focus_manager: NativeTabFocusManager::default(),
         last_activated: None,
         pending_activation_quiet: None,
         is_hidden: false,
@@ -2269,5 +2338,71 @@ mod tests {
         ];
 
         assert_eq!(latest_focused_tab_notification_index(kinds), Some(3));
+    }
+
+    #[test]
+    fn native_tab_focus_guard_repairs_matching_main_window_within_deadline() {
+        let now = Instant::now();
+        let window = WindowId::new(7, 11);
+        let window_server_id = WindowServerId::new(11);
+        let mut manager = NativeTabFocusManager::default();
+        manager.arm(window, window_server_id, now);
+
+        let guard = manager.take_for_deactivation(Some(window), now + Duration::from_millis(119));
+
+        assert_eq!(
+            guard.map(|guard| (guard.window, guard.window_server_id)),
+            Some((window, window_server_id))
+        );
+    }
+
+    #[test]
+    fn native_tab_focus_guard_expires_before_late_deactivation() {
+        let now = Instant::now();
+        let window = WindowId::new(7, 11);
+        let mut manager = NativeTabFocusManager::default();
+        manager.arm(window, WindowServerId::new(11), now);
+
+        assert!(
+            manager
+                .take_for_deactivation(Some(window), now + Duration::from_millis(121))
+                .is_none()
+        );
+    }
+
+    #[test]
+    fn native_tab_focus_guard_rejects_a_different_main_window() {
+        let now = Instant::now();
+        let mut manager = NativeTabFocusManager::default();
+        manager.arm(WindowId::new(7, 11), WindowServerId::new(11), now);
+
+        assert!(manager.take_for_deactivation(Some(WindowId::new(7, 12)), now).is_none());
+    }
+
+    #[test]
+    fn rapid_native_tab_switches_repair_only_the_latest_target() {
+        let now = Instant::now();
+        let latest = WindowId::new(7, 12);
+        let mut manager = NativeTabFocusManager::default();
+        manager.arm(WindowId::new(7, 11), WindowServerId::new(11), now);
+        manager.arm(latest, WindowServerId::new(12), now + Duration::from_millis(20));
+
+        assert_eq!(
+            manager
+                .take_for_deactivation(Some(latest), now + Duration::from_millis(60))
+                .map(|guard| guard.window),
+            Some(latest)
+        );
+    }
+
+    #[test]
+    fn closing_native_tab_target_clears_app_focus_guard() {
+        let now = Instant::now();
+        let window = WindowId::new(7, 11);
+        let mut manager = NativeTabFocusManager::default();
+        manager.arm(window, WindowServerId::new(11), now);
+        manager.clear_for_window(window);
+
+        assert!(manager.take_for_deactivation(Some(window), now).is_none());
     }
 }

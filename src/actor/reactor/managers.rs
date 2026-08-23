@@ -1,5 +1,3 @@
-use std::time::{Duration, Instant};
-
 use objc2_core_foundation::{CGPoint, CGRect};
 use rift_protocol::StackInfo;
 use tracing::trace;
@@ -20,66 +18,10 @@ use crate::common::config::{LayoutMode, WindowSnappingSettings};
 use crate::layout_engine::LayoutEngine;
 use crate::model::broadcast::{BroadcastEvent, BroadcastSender, protocol_workspace_id};
 use crate::sys::screen::SpaceId;
-use crate::sys::window_server::WindowServerId;
-
-// Native tab handoff can deactivate its owner tens of milliseconds after AX
-// focus settles. Keep the repair window short enough not to mask an intentional
-// application switch immediately after the tab shortcut.
-const NATIVE_TAB_FOCUS_GUARD_DURATION: Duration = Duration::from_millis(120);
 
 /// Manages application state and rules
 pub struct AppManager {
     pub apps: HashMap<pid_t, AppState>,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct NativeTabFocusGuard {
-    pub window: WindowId,
-    pub window_server_id: WindowServerId,
-    expires_at: Instant,
-}
-
-#[derive(Default)]
-pub struct NativeTabFocusManager {
-    guard: Option<NativeTabFocusGuard>,
-}
-
-impl NativeTabFocusManager {
-    pub fn arm(&mut self, window: WindowId, window_server_id: WindowServerId, now: Instant) {
-        self.guard = Some(NativeTabFocusGuard {
-            window,
-            window_server_id,
-            expires_at: now + NATIVE_TAB_FOCUS_GUARD_DURATION,
-        });
-    }
-
-    pub fn take_for_deactivation(
-        &mut self,
-        pid: pid_t,
-        now: Instant,
-    ) -> Option<NativeTabFocusGuard> {
-        let guard = self.guard?;
-        if now > guard.expires_at {
-            self.guard = None;
-            return None;
-        }
-        if guard.window.pid != pid {
-            return None;
-        }
-        self.guard.take()
-    }
-
-    pub fn clear_for_window(&mut self, window: WindowId) {
-        if self.guard.is_some_and(|guard| guard.window == window) {
-            self.guard = None;
-        }
-    }
-
-    pub fn clear_for_app(&mut self, pid: pid_t) {
-        if self.guard.is_some_and(|guard| guard.window.pid == pid) {
-            self.guard = None;
-        }
-    }
 }
 
 impl AppManager {
@@ -488,13 +430,9 @@ pub struct PendingSpaceChangeManager {
 
 #[cfg(test)]
 mod tests {
-    use std::time::{Duration, Instant};
-
     use objc2_core_foundation::{CGPoint, CGRect, CGSize};
 
-    use super::{NativeTabFocusManager, bound_frame_to_screen};
-    use crate::actor::app::WindowId;
-    use crate::sys::window_server::WindowServerId;
+    use super::bound_frame_to_screen;
 
     fn rect(x: f64, y: f64, w: f64, h: f64) -> CGRect {
         CGRect::new(CGPoint::new(x, y), CGSize::new(w, h))
@@ -534,71 +472,5 @@ mod tests {
         let bounded = bound_frame_to_screen(frame, screen);
         assert_eq!(bounded.origin.x, 2998.0);
         assert_eq!(bounded.size.width, 600.0);
-    }
-
-    #[test]
-    fn native_tab_focus_guard_restores_matching_app_within_deadline() {
-        let now = Instant::now();
-        let window = WindowId::new(7, 11);
-        let window_server_id = WindowServerId::new(11);
-        let mut manager = NativeTabFocusManager::default();
-        manager.arm(window, window_server_id, now);
-
-        let guard = manager.take_for_deactivation(7, now + Duration::from_millis(119));
-
-        assert_eq!(
-            guard.map(|guard| (guard.window, guard.window_server_id)),
-            Some((window, window_server_id))
-        );
-    }
-
-    #[test]
-    fn native_tab_focus_guard_does_not_restore_after_deadline() {
-        let now = Instant::now();
-        let mut manager = NativeTabFocusManager::default();
-        manager.arm(WindowId::new(7, 11), WindowServerId::new(11), now);
-
-        assert!(manager.take_for_deactivation(7, now + Duration::from_millis(121)).is_none());
-    }
-
-    #[test]
-    fn unrelated_app_deactivation_does_not_consume_native_tab_focus_guard() {
-        let now = Instant::now();
-        let window = WindowId::new(7, 11);
-        let mut manager = NativeTabFocusManager::default();
-        manager.arm(window, WindowServerId::new(11), now);
-
-        assert!(manager.take_for_deactivation(8, now).is_none());
-        assert_eq!(
-            manager.take_for_deactivation(7, now).map(|guard| guard.window),
-            Some(window)
-        );
-    }
-
-    #[test]
-    fn rapid_native_tab_switches_restore_only_the_latest_target() {
-        let now = Instant::now();
-        let latest = WindowId::new(7, 12);
-        let mut manager = NativeTabFocusManager::default();
-        manager.arm(WindowId::new(7, 11), WindowServerId::new(11), now);
-        manager.arm(latest, WindowServerId::new(12), now + Duration::from_millis(20));
-
-        assert_eq!(
-            manager
-                .take_for_deactivation(7, now + Duration::from_millis(60))
-                .map(|guard| guard.window),
-            Some(latest)
-        );
-    }
-
-    #[test]
-    fn closing_native_tab_target_clears_focus_guard() {
-        let now = Instant::now();
-        let window = WindowId::new(7, 11);
-        let mut manager = NativeTabFocusManager::default();
-        manager.arm(window, WindowServerId::new(11), now);
-        manager.clear_for_window(window);
-
-        assert!(manager.take_for_deactivation(7, now).is_none());
     }
 }
