@@ -76,6 +76,8 @@ enum AxNotificationKind {
     FocusedTabChanged,
 }
 
+type AxNotification = (AXUIElement, AxNotificationKind, Option<WindowId>);
+
 const APP_NOTIFICATIONS: &[(AxNotificationKind, &str)] = &[
     (
         AxNotificationKind::ApplicationActivated,
@@ -307,6 +309,18 @@ fn decode_notification_data(
     let idx = NonZeroU32::new((data >> 8) as u32);
     let wid = idx.map(|idx| WindowId { pid, idx });
     Some((kind, wid))
+}
+
+fn latest_focused_tab_notification_index(
+    notifications: impl IntoIterator<Item = AxNotificationKind>,
+) -> Option<usize> {
+    notifications
+        .into_iter()
+        .enumerate()
+        .filter_map(|(index, kind)| {
+            (kind == AxNotificationKind::FocusedTabChanged).then_some(index)
+        })
+        .last()
 }
 
 #[derive(Clone)]
@@ -635,6 +649,7 @@ struct State {
     windows: HashMap<WindowId, AppWindowState>,
     elem_to_wid: HashMap<AXUIElement, WindowId>,
     main_window: Option<WindowId>,
+    native_tab_window: Option<WindowId>,
     last_activated: Option<(Instant, Quiet, Option<WindowId>, oneshot::Sender<()>)>,
     pending_activation_quiet: Option<(Instant, Quiet)>,
     is_hidden: bool,
@@ -829,7 +844,7 @@ impl State {
         info: AppInfo,
         handle: AppThreadHandle,
         requests_rx: actor::Receiver<Request>,
-        notifications_rx: actor::Receiver<(AXUIElement, AxNotificationKind, Option<WindowId>)>,
+        notifications_rx: actor::Receiver<AxNotification>,
         raises_rx: actor::Receiver<RaiseRequest>,
     ) {
         if !self.init(handle.clone(), info) {
@@ -848,7 +863,7 @@ impl State {
     async fn handle_incoming(
         this: &RefCell<Self>,
         mut requests_rx: actor::Receiver<Request>,
-        mut notifications_rx: actor::Receiver<(AXUIElement, AxNotificationKind, Option<WindowId>)>,
+        mut notifications_rx: actor::Receiver<AxNotification>,
     ) {
         let mut batch = Vec::new();
         loop {
@@ -862,14 +877,34 @@ impl State {
                     }
                 }
                 notif = notifications_rx.recv() => {
-                    let Some((_, (elem, notif, hinted_wid))) = notif else { break };
-                    this.borrow_mut().handle_notification(elem, notif, hinted_wid);
+                    let Some((_, first)) = notif else { break };
+                    let mut batch = vec![first];
+                    while let Ok((_, notification)) = notifications_rx.try_recv() {
+                        batch.push(notification);
+                    }
+                    Self::handle_notification_batch(this, batch);
                     continue;
                 }
             };
             if Self::handle_request_batch(this, &mut batch) {
                 break;
             }
+        }
+    }
+
+    fn handle_notification_batch(this: &RefCell<Self>, batch: Vec<AxNotification>) {
+        // AX can queue every intermediate tab during a shortcut burst even though
+        // only the final selection still reflects application state.
+        let latest_focused_tab =
+            latest_focused_tab_notification_index(batch.iter().map(|(_, kind, _)| *kind));
+        for (index, (elem, notification, hinted_wid)) in batch.into_iter().enumerate() {
+            if notification == AxNotificationKind::FocusedTabChanged
+                && Some(index) != latest_focused_tab
+            {
+                trace!("Coalescing stale focused-tab notification");
+                continue;
+            }
+            this.borrow_mut().handle_notification(elem, notification, hinted_wid);
         }
     }
 
@@ -1080,6 +1115,7 @@ impl State {
         }
 
         self.main_window = self.app.main_window().ok().and_then(|w| self.id(&w).ok());
+        self.native_tab_window = self.main_window;
         self.is_frontmost = self.app.frontmost().unwrap_or(false);
 
         self.events_tx.send(Event::ApplicationLaunched {
@@ -1696,6 +1732,7 @@ impl State {
             }
         };
 
+        self.sync_native_tab_window_for_main_change(wid);
         if self.main_window == Some(wid) {
             return Some(wid);
         }
@@ -1708,21 +1745,40 @@ impl State {
         Some(wid)
     }
 
-    fn on_focused_tab_changed(&mut self, elem: AXUIElement) {
-        let Some(previous) = self.main_window else {
+    fn on_focused_tab_changed(&mut self, notified_elem: AXUIElement) {
+        let elem = match self.app.main_window() {
+            Ok(elem) => elem,
+            Err(error) if notified_elem.main().unwrap_or(false) => {
+                trace!(
+                    ?error,
+                    "Using focused-tab element after AXMainWindow lookup failed"
+                );
+                notified_elem
+            }
+            Err(error) => {
+                trace!(
+                    ?error,
+                    "Ignoring focused-tab notification without a current main window"
+                );
+                return;
+            }
+        };
+        let existing = self.id(&elem).ok();
+        if existing.is_some() && existing == self.native_tab_window {
+            return;
+        }
+
+        let Some(previous) = self.native_tab_window.or(self.main_window) else {
             let _ = self.on_main_window_changed(None, true);
             return;
         };
-        let Some(previous_frame) =
-            self.windows.get(&previous).and_then(|window| window.elem.frame().ok())
-        else {
+        let Some(previous_frame) = self.native_tab_frame(previous) else {
             let _ = self.on_main_window_changed(None, true);
             return;
         };
 
         let wsid = WindowServerId::try_from(&elem).ok();
         let server_info_hint = wsid.and_then(window_server::get_window);
-        let existing = self.id(&elem).ok();
         let resolved = match existing {
             Some(current) => WindowInfo::from_ax_element(&elem, server_info_hint)
                 .ok()
@@ -1753,6 +1809,7 @@ impl State {
             ));
         }
 
+        self.native_tab_window = Some(current);
         if self.main_window != Some(current) {
             self.main_window = Some(current);
             self.send_event(Event::ApplicationMainWindowChanged(
@@ -1760,6 +1817,35 @@ impl State {
                 Some(current),
                 Quiet::No,
             ));
+        }
+    }
+
+    fn native_tab_frame(&self, window: WindowId) -> Option<CGRect> {
+        self.windows.get(&window).and_then(|window| {
+            window.elem.frame().ok().or_else(|| {
+                window
+                    .window_server_id
+                    .and_then(window_server::get_window)
+                    .map(|info| info.frame)
+            })
+        })
+    }
+
+    fn sync_native_tab_window_for_main_change(&mut self, current: WindowId) {
+        let Some(previous) = self.native_tab_window else {
+            self.native_tab_window = Some(current);
+            return;
+        };
+        if previous == current {
+            return;
+        }
+
+        let belongs_to_another_window = self
+            .native_tab_frame(previous)
+            .zip(self.native_tab_frame(current))
+            .is_some_and(|(previous, current)| !native_tab_frames_match(previous, current));
+        if belongs_to_another_window {
+            self.native_tab_window = Some(current);
         }
     }
 
@@ -2353,6 +2439,9 @@ impl State {
     fn remove_window(&mut self, wid: WindowId) -> Option<AppWindowState> {
         let window = self.windows.remove(&wid)?;
         self.elem_to_wid.remove(&window.elem);
+        if self.native_tab_window == Some(wid) {
+            self.native_tab_window = None;
+        }
         if window.is_animating {
             let app = self.app.clone();
             self.enhanced_ui.release(&app);
@@ -2452,6 +2541,7 @@ fn app_thread_main(
         windows: HashMap::default(),
         elem_to_wid: HashMap::default(),
         main_window: None,
+        native_tab_window: None,
         last_activated: None,
         pending_activation_quiet: None,
         is_hidden: false,
@@ -2515,5 +2605,17 @@ mod tests {
             decode_notification_data(42, encoded),
             Some((AxNotificationKind::FocusedTabChanged, None))
         );
+    }
+
+    #[test]
+    fn focused_tab_notification_batch_keeps_only_the_latest_tab_index() {
+        let kinds = [
+            AxNotificationKind::FocusedTabChanged,
+            AxNotificationKind::WindowMoved,
+            AxNotificationKind::FocusedTabChanged,
+            AxNotificationKind::FocusedTabChanged,
+        ];
+
+        assert_eq!(latest_focused_tab_notification_index(kinds), Some(3));
     }
 }

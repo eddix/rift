@@ -1,6 +1,8 @@
+use tracing::trace;
+
 use crate::actor::app::{WindowId, WindowInfo, native_tab_frames_match};
 use crate::actor::reactor::WindowState;
-use crate::actor::reactor::events::{EventOutcome, window};
+use crate::actor::reactor::events::EventOutcome;
 use crate::actor::reactor::managers::LayoutManager;
 use crate::actor::reactor::transaction_manager::TransactionManager;
 use crate::model::RiftState;
@@ -28,44 +30,36 @@ pub fn handle_native_tab_focused(
     } = payload;
 
     let Some(previous_state) = state.windows.window(previous).cloned() else {
-        return handle_regular_window_focus(
-            state,
-            transactions,
-            current,
-            window,
-            window_server_info,
+        trace!(
+            ?previous,
+            ?current,
+            "Ignoring native-tab transition with a stale source"
         );
+        return Ok(EventOutcome::no_change());
     };
     let Some(assignment) = state.windows.workspace_info_for_window(previous) else {
-        return handle_regular_window_focus(
-            state,
-            transactions,
-            current,
-            window,
-            window_server_info,
+        trace!(
+            ?previous,
+            ?current,
+            "Ignoring native-tab transition without a layout slot"
         );
+        return Ok(EventOutcome::no_change());
     };
     let Some(current_wsid) = window.sys_id else {
-        return handle_regular_window_focus(
-            state,
-            transactions,
-            current,
-            window,
-            window_server_info,
+        trace!(
+            ?previous,
+            ?current,
+            "Ignoring native-tab transition without a WindowServer id"
         );
+        return Ok(EventOutcome::no_change());
     };
 
     let is_replacement = previous != current
         && previous.pid == current.pid
         && native_tab_frames_match(previous_state.frame_monotonic, window.frame);
     if !is_replacement {
-        return handle_regular_window_focus(
-            state,
-            transactions,
-            current,
-            window,
-            window_server_info,
-        );
+        trace!(?previous, ?current, "Ignoring unverified native-tab transition");
+        return Ok(EventOutcome::no_change());
     }
 
     let previous_wsid = previous_state.info.sys_id;
@@ -98,23 +92,5 @@ pub fn handle_native_tab_focused(
         .with_arrange_space_scope(Some(assignment.space))
         .with_focused_window_broadcast(current);
     outcome.focused_window = Some(current);
-    outcome.refresh_window_notifications = true;
     Ok(outcome)
-}
-
-fn handle_regular_window_focus(
-    state: &mut RiftState,
-    transactions: &TransactionManager,
-    current: WindowId,
-    window: WindowInfo,
-    window_server_info: Option<WindowServerInfo>,
-) -> anyhow::Result<EventOutcome> {
-    if state.windows.contains_window(current) {
-        return Ok(EventOutcome::focus_changed(Some(current), false));
-    }
-    window::handle_window_created(state, transactions, window::WindowCreatedPayload {
-        window_id: current,
-        window,
-        window_server_info,
-    })
 }
