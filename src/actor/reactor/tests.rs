@@ -4029,6 +4029,235 @@ fn rekey_window(reactor: &mut Reactor, old_wid: WindowId, new_wid: WindowId) {
 }
 
 #[test]
+fn native_tab_focus_replaces_the_existing_layout_slot() {
+    let (mut apps, mut reactor) = test_context_with_workspace_count(2);
+    let screen = CGRect::new(CGPoint::new(0., 0.), CGSize::new(1000., 1000.));
+    let space = SpaceId::new(1);
+    let previous = WindowId::new(1, 1);
+    let current = WindowId::new(1, 2);
+    let current_wsid = WindowServerId::new(10_002);
+
+    reactor.handle_event(space_state_event(vec![screen], vec![Some(space)]));
+    make_active_app(&mut apps, &mut reactor, 1, make_windows(1), Some(previous));
+    let workspaces = reactor.test_workspace_ids(space);
+    let target_workspace = workspaces[1];
+    assert!(reactor.assign_test_window_to_workspace(space, previous, target_workspace));
+    assert!(reactor.set_test_active_workspace(space, target_workspace));
+    reactor.state.windows.mark_window_server_observed(current_wsid);
+
+    let frame = reactor.state.windows.window(previous).expect("previous tab").frame_monotonic;
+    reactor.handle_event(Event::NativeTabFocused {
+        previous,
+        current,
+        window: make_window_info(frame, Some(current_wsid), "Tab 2", Some("com.testapp1")),
+        window_server_info: Some(WindowServerInfo {
+            id: current_wsid,
+            pid: current.pid,
+            layer: 0,
+            frame,
+            min_frame: CGSize::ZERO,
+            max_frame: CGSize::ZERO,
+        }),
+    });
+
+    assert_eq!(
+        reactor.test_workspace_for_window(space, current),
+        Some(target_workspace)
+    );
+    assert_eq!(reactor.test_workspace_for_window(space, previous), None);
+    assert!(!reactor.state.windows.contains_window(previous));
+    assert!(reactor.state.windows.contains_window(current));
+    assert!(reactor.state.windows.is_window_visible(current_wsid));
+    assert!(!reactor.state.windows.is_window_server_observed(current_wsid));
+    assert_eq!(reactor.main_window(), Some(current));
+    let layout = reactor.query_layout_state(Some(space.get()), Some(1)).expect("layout");
+    assert_eq!(layout.tiled_windows, vec![current.into()]);
+}
+
+#[test]
+fn native_tab_focus_can_switch_back_to_a_previously_hidden_tab() {
+    let (mut apps, mut reactor) = test_context();
+    let screen = CGRect::new(CGPoint::new(0., 0.), CGSize::new(1000., 1000.));
+    let space = SpaceId::new(1);
+    let first = WindowId::new(1, 1);
+    let second = WindowId::new(1, 2);
+    let first_wsid = WindowServerId::new(10_001);
+    let second_wsid = WindowServerId::new(10_002);
+
+    reactor.handle_event(space_state_event(vec![screen], vec![Some(space)]));
+    make_active_app(&mut apps, &mut reactor, 1, make_windows(1), Some(first));
+    let frame = reactor.state.windows.window(first).expect("first tab").frame_monotonic;
+
+    for (previous, current, current_wsid, title) in [
+        (first, second, second_wsid, "Tab 2"),
+        (second, first, first_wsid, "Tab 1"),
+    ] {
+        reactor.handle_event(Event::NativeTabFocused {
+            previous,
+            current,
+            window: make_window_info(frame, Some(current_wsid), title, Some("com.testapp1")),
+            window_server_info: Some(WindowServerInfo {
+                id: current_wsid,
+                pid: current.pid,
+                layer: 0,
+                frame,
+                min_frame: CGSize::ZERO,
+                max_frame: CGSize::ZERO,
+            }),
+        });
+    }
+
+    let layout = reactor.query_layout_state(Some(space.get()), None).expect("layout");
+    assert_eq!(layout.tiled_windows, vec![first.into()]);
+    assert_eq!(reactor.main_window(), Some(first));
+    assert!(reactor.state.windows.contains_window(first));
+    assert!(!reactor.state.windows.contains_window(second));
+}
+
+#[test]
+fn native_tab_focus_preserves_floating_membership() {
+    let (mut apps, mut reactor) = test_context();
+    let screen = CGRect::new(CGPoint::new(0., 0.), CGSize::new(1000., 1000.));
+    let space = SpaceId::new(1);
+    let previous = WindowId::new(1, 1);
+    let current = WindowId::new(1, 2);
+    let current_wsid = WindowServerId::new(10_002);
+
+    reactor.handle_event(space_state_event(vec![screen], vec![Some(space)]));
+    make_active_app(&mut apps, &mut reactor, 1, make_windows(1), Some(previous));
+    reactor.handle_test_layout_command(LayoutCommand::ToggleWindowFloating);
+    apps.simulate_until_quiet(&mut reactor);
+    let frame = reactor.state.windows.window(previous).expect("previous tab").frame_monotonic;
+
+    reactor.handle_event(Event::NativeTabFocused {
+        previous,
+        current,
+        window: make_window_info(frame, Some(current_wsid), "Tab 2", Some("com.testapp1")),
+        window_server_info: Some(WindowServerInfo {
+            id: current_wsid,
+            pid: current.pid,
+            layer: 0,
+            frame,
+            min_frame: CGSize::ZERO,
+            max_frame: CGSize::ZERO,
+        }),
+    });
+
+    assert!(reactor.layout_manager.layout_engine.is_window_floating(current));
+    assert!(!reactor.layout_manager.layout_engine.is_window_floating(previous));
+}
+
+#[test]
+fn native_tab_focus_rekeys_every_workspace_layout_mode() {
+    let modes = [
+        LayoutMode::Traditional,
+        LayoutMode::Bsp,
+        LayoutMode::Stack,
+        LayoutMode::MasterStack,
+        LayoutMode::Scrolling,
+    ];
+
+    for (index, mode) in modes.into_iter().enumerate() {
+        let (mut apps, mut reactor) = test_context();
+        let screen = CGRect::new(CGPoint::new(0., 0.), CGSize::new(1000., 1000.));
+        let space = SpaceId::new(1);
+        let previous = WindowId::new(1, 1);
+        let current = WindowId::new(1, 2);
+        let current_wsid = WindowServerId::new(20_000 + index as u32);
+
+        reactor.handle_event(space_state_event(vec![screen], vec![Some(space)]));
+        make_active_app(&mut apps, &mut reactor, 1, make_windows(1), Some(previous));
+        reactor.handle_test_layout_command(LayoutCommand::SetWorkspaceLayout {
+            workspace: None,
+            mode,
+        });
+        let frame = reactor.state.windows.window(previous).expect("previous tab").frame_monotonic;
+
+        reactor.handle_event(Event::NativeTabFocused {
+            previous,
+            current,
+            window: make_window_info(frame, Some(current_wsid), "Tab 2", Some("com.testapp1")),
+            window_server_info: Some(WindowServerInfo {
+                id: current_wsid,
+                pid: current.pid,
+                layer: 0,
+                frame,
+                min_frame: CGSize::ZERO,
+                max_frame: CGSize::ZERO,
+            }),
+        });
+
+        let layout = reactor.query_layout_state(Some(space.get()), None).expect("layout");
+        assert_eq!(
+            layout.tiled_windows,
+            vec![current.into()],
+            "native tab replacement failed in {mode:?} layout"
+        );
+    }
+}
+
+#[test]
+fn focused_tab_event_with_a_different_frame_adds_a_regular_window() {
+    let (mut apps, mut reactor) = test_context();
+    let screen = CGRect::new(CGPoint::new(0., 0.), CGSize::new(1000., 1000.));
+    let space = SpaceId::new(1);
+    let previous = WindowId::new(1, 1);
+    let current = WindowId::new(1, 2);
+    let current_wsid = WindowServerId::new(10_002);
+    let separate_frame = CGRect::new(CGPoint::new(120., 80.), CGSize::new(400., 300.));
+
+    reactor.handle_event(space_state_event(vec![screen], vec![Some(space)]));
+    make_active_app(&mut apps, &mut reactor, 1, make_windows(1), Some(previous));
+    reactor.handle_event(Event::NativeTabFocused {
+        previous,
+        current,
+        window: make_window_info(
+            separate_frame,
+            Some(current_wsid),
+            "Separate window",
+            Some("com.testapp1"),
+        ),
+        window_server_info: Some(WindowServerInfo {
+            id: current_wsid,
+            pid: current.pid,
+            layer: 0,
+            frame: separate_frame,
+            min_frame: CGSize::ZERO,
+            max_frame: CGSize::ZERO,
+        }),
+    });
+
+    let layout = reactor.query_layout_state(Some(space.get()), None).expect("layout");
+    assert_eq!(layout.tiled_windows.len(), 2);
+    assert!(reactor.state.windows.contains_window(previous));
+    assert!(reactor.state.windows.contains_window(current));
+}
+
+#[test]
+fn focused_tab_event_without_window_server_identity_adds_a_regular_window() {
+    let (mut apps, mut reactor) = test_context();
+    let screen = CGRect::new(CGPoint::new(0., 0.), CGSize::new(1000., 1000.));
+    let space = SpaceId::new(1);
+    let previous = WindowId::new(1, 1);
+    let current = WindowId::new(1, 2);
+
+    reactor.handle_event(space_state_event(vec![screen], vec![Some(space)]));
+    make_active_app(&mut apps, &mut reactor, 1, make_windows(1), Some(previous));
+    let frame = reactor.state.windows.window(previous).expect("previous tab").frame_monotonic;
+    reactor.handle_event(Event::NativeTabFocused {
+        previous,
+        current,
+        window: make_window_info(frame, None, "Tab without WSID", Some("com.testapp1")),
+        window_server_info: None,
+    });
+
+    let layout = reactor.query_layout_state(Some(space.get()), None).expect("layout");
+    assert_eq!(layout.tiled_windows.len(), 2);
+    assert!(reactor.state.windows.contains_window(previous));
+    assert!(reactor.state.windows.contains_window(current));
+}
+
+#[test]
 fn fullscreen_startup_applies_app_rules_to_hidden_user_space_windows() {
     let (reactor, wid, user_space, _default_workspace, target_workspace) =
         fullscreen_startup_fixture(true, false);

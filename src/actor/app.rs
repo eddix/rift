@@ -31,6 +31,7 @@ use crate::sys::axuielement::{AX_STANDARD_WINDOW_SUBROLE, AXUIElement, Error as 
 use crate::sys::enhanced_ui::EnhancedUi;
 use crate::sys::event;
 use crate::sys::executor::Executor;
+use crate::sys::geometry::IsWithin;
 use crate::sys::observer::Observer;
 use crate::sys::process::ProcessInfo;
 use crate::sys::timer::Timer;
@@ -41,6 +42,8 @@ const kAXApplicationDeactivatedNotification: &str = "AXApplicationDeactivated";
 const kAXApplicationHiddenNotification: &str = "AXApplicationHidden";
 const kAXApplicationShownNotification: &str = "AXApplicationShown";
 const kAXMainWindowChangedNotification: &str = "AXMainWindowChanged";
+// Private Accessibility notification emitted when the selected native tab changes.
+const kAXFocusedTabChangedNotification: &str = "AXFocusedTabChanged";
 const kAXWindowCreatedNotification: &str = "AXWindowCreated";
 const kAXMenuOpenedNotification: &str = "AXMenuOpened";
 const kAXMenuClosedNotification: &str = "AXMenuClosed";
@@ -67,6 +70,7 @@ enum AxNotificationKind {
     WindowMiniaturized,
     WindowDeminiaturized,
     TitleChanged,
+    FocusedTabChanged,
 }
 
 const APP_NOTIFICATIONS: &[(AxNotificationKind, &str)] = &[
@@ -117,6 +121,12 @@ const WINDOW_ANIMATION_NOTIFICATIONS: &[AxNotificationKind] = &[
     AxNotificationKind::WindowMoved,
     AxNotificationKind::WindowResized,
 ];
+
+const NATIVE_TAB_FRAME_TOLERANCE: f64 = 2.0;
+
+pub(crate) fn native_tab_frames_match(previous: CGRect, current: CGRect) -> bool {
+    previous.is_within(NATIVE_TAB_FRAME_TOLERANCE, current)
+}
 
 /// An identifier representing a window.
 ///
@@ -253,6 +263,7 @@ impl AxNotificationKind {
             12 => Self::WindowMiniaturized,
             13 => Self::WindowDeminiaturized,
             14 => Self::TitleChanged,
+            15 => Self::FocusedTabChanged,
             _ => return None,
         })
     }
@@ -273,6 +284,7 @@ impl AxNotificationKind {
             Self::WindowMiniaturized => kAXWindowMiniaturizedNotification,
             Self::WindowDeminiaturized => kAXWindowDeminiaturizedNotification,
             Self::TitleChanged => kAXTitleChangedNotification,
+            Self::FocusedTabChanged => kAXFocusedTabChangedNotification,
         }
     }
 }
@@ -726,6 +738,18 @@ impl State {
             }
         }
 
+        // `AXFocusedTabChanged` is private and not implemented by every app. Keep
+        // this best-effort so unsupported applications can still be managed.
+        let focused_tab_data =
+            encode_notification_data(AxNotificationKind::FocusedTabChanged, None);
+        if let Err(error) = self.observer.add_notification_with_data(
+            &self.app,
+            kAXFocusedTabChangedNotification,
+            focused_tab_data,
+        ) {
+            trace!(pid = ?self.pid, ?error, "Focused-tab notifications are unavailable");
+        }
+
         let initial_window_elements = self.app.windows().unwrap_or_default();
         let server_info_by_id = self.visible_window_server_info_map(&initial_window_elements);
 
@@ -1065,6 +1089,7 @@ impl State {
                 self.remove_stale_windows();
                 self.on_main_window_changed(None, false);
             }
+            AxNotificationKind::FocusedTabChanged => self.on_focused_tab_changed(elem),
             AxNotificationKind::WindowCreated => {
                 if self.id(&elem).is_ok() {
                     return;
@@ -1423,6 +1448,61 @@ impl State {
         };
         self.send_event(Event::ApplicationMainWindowChanged(self.pid, Some(wid), quiet));
         Some(wid)
+    }
+
+    fn on_focused_tab_changed(&mut self, elem: AXUIElement) {
+        let Some(previous) = self.main_window else {
+            let _ = self.on_main_window_changed(None, true);
+            return;
+        };
+        let Some(previous_frame) =
+            self.windows.get(&previous).and_then(|window| window.elem.frame().ok())
+        else {
+            let _ = self.on_main_window_changed(None, true);
+            return;
+        };
+
+        let wsid = WindowServerId::try_from(&elem).ok();
+        let server_info_hint = wsid.and_then(window_server::get_window);
+        let existing = self.id(&elem).ok();
+        let resolved = match existing {
+            Some(current) => WindowInfo::from_ax_element(&elem, server_info_hint)
+                .ok()
+                .map(|(info, server_info)| (info, current, server_info, false)),
+            None => self
+                .register_window(elem, server_info_hint)
+                .map(|(info, current, server_info)| (info, current, server_info, true)),
+        };
+        let Some((info, current, server_info, was_registered)) = resolved else {
+            return;
+        };
+
+        if previous != current && native_tab_frames_match(previous_frame, info.frame) {
+            // Native tabs are separate AX windows. Keep the hidden tab registered
+            // here so a later switch can restore its identity and layout slot.
+            self.send_event(Event::NativeTabFocused {
+                previous,
+                current,
+                window: info,
+                window_server_info: server_info,
+            });
+        } else if was_registered {
+            self.send_event(Event::WindowCreated(
+                current,
+                info,
+                server_info,
+                event::get_mouse_state(),
+            ));
+        }
+
+        if self.main_window != Some(current) {
+            self.main_window = Some(current);
+            self.send_event(Event::ApplicationMainWindowChanged(
+                self.pid,
+                Some(current),
+                Quiet::No,
+            ));
+        }
     }
 
     fn take_activation_context(&mut self) -> (Quiet, Option<WindowId>) {
@@ -2073,4 +2153,19 @@ fn trace<T>(
         }
     }
     out
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn focused_tab_notification_round_trips_through_observer_data() {
+        let encoded = encode_notification_data(AxNotificationKind::FocusedTabChanged, None);
+
+        assert_eq!(
+            decode_notification_data(42, encoded),
+            Some((AxNotificationKind::FocusedTabChanged, None))
+        );
+    }
 }
