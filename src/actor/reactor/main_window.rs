@@ -81,6 +81,11 @@ impl MainWindowTracker {
                 self.window_server_focus = Some(wid);
                 return None;
             }
+            &Event::NativeTabFocused { current, .. } => {
+                self.window_server_focus_authoritative = true;
+                self.window_server_focus = Some(current);
+                return None;
+            }
             _ => return None,
         };
         // Once WindowServer focus has produced a result, AX activation/main-window
