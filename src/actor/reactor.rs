@@ -71,8 +71,8 @@ use std::thread;
 use animation::Sender as AnimationSender;
 use events::{
     EventOutcome, app as application_workflow, command as command_workflow,
-    drag as interaction_workflow, focus as focus_service, space as topology_workflow,
-    system as system_workflow, window as window_workflow,
+    drag as interaction_workflow, focus as focus_service, native_tab as native_tab_workflow,
+    space as topology_workflow, system as system_workflow, window as window_workflow,
 };
 use main_window::MainWindowTracker;
 use managers::LayoutManager;
@@ -189,6 +189,13 @@ pub enum Event {
     ApplicationGloballyActivated(pid_t),
     ApplicationGloballyDeactivated(pid_t),
     ApplicationMainWindowChanged(pid_t, Option<WindowId>, Quiet),
+    #[serde(skip)]
+    NativeTabFocused {
+        previous: WindowId,
+        current: WindowId,
+        window: WindowInfo,
+        window_server_info: Option<WindowServerInfo>,
+    },
     /// Authoritative focus resolved from WindowServer's key-focus process and
     /// the z-ordered windows on the active native space.
     #[serde(skip)]
@@ -885,6 +892,7 @@ impl Reactor {
         let wsid = match event {
             Event::WindowFrameChanged(wid, ..) => Some(wid.idx.get()),
             Event::WindowCreated(wid, ..) => Some(wid.idx.get()),
+            Event::NativeTabFocused { current, .. } => Some(current.idx.get()),
             Event::WindowDestroyed(wid) => Some(wid.idx.get()),
             Event::WindowMinimized(wid) => Some(wid.idx.get()),
             Event::WindowDeminiaturized(wid) => Some(wid.idx.get()),
@@ -914,6 +922,7 @@ impl Reactor {
                 | Event::WindowDestroyed(..)
                 | Event::WindowServerDestroyed(..)
                 | Event::WindowServerAppeared(..)
+                | Event::NativeTabFocused { .. }
                 | Event::WindowsDiscovered { .. }
                 | Event::ApplicationLaunched { .. }
                 | Event::ApplicationTerminated(..)
@@ -937,6 +946,7 @@ impl Reactor {
                 | Event::WindowMinimized(..)
                 | Event::WindowDeminiaturized(..)
                 | Event::WindowTitleChanged(..)
+                | Event::NativeTabFocused { .. }
                 | Event::WindowsDiscovered { .. }
                 | Event::SpaceCreated(..)
                 | Event::SpaceDestroyed(..)
@@ -1154,6 +1164,24 @@ impl Reactor {
                 } else {
                     EventOutcome::default()
                 });
+            }
+            Event::NativeTabFocused {
+                previous,
+                current,
+                window,
+                window_server_info,
+            } => {
+                return native_tab_workflow::handle_native_tab_focused(
+                    &mut self.state,
+                    &mut self.layout_manager,
+                    &self.transaction_manager,
+                    native_tab_workflow::NativeTabFocusedPayload {
+                        previous,
+                        current,
+                        window,
+                        window_server_info,
+                    },
+                );
             }
             Event::RegisterWmSender(sender) => {
                 return Ok(system_workflow::handle_register_wm_sender(
