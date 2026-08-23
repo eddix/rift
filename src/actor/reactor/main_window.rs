@@ -81,11 +81,6 @@ impl MainWindowTracker {
                 self.window_server_focus = Some(wid);
                 return None;
             }
-            &Event::NativeTabFocused { current, .. } => {
-                self.window_server_focus_authoritative = true;
-                self.window_server_focus = Some(current);
-                return None;
-            }
             _ => return None,
         };
         // Once WindowServer focus has produced a result, AX activation/main-window
@@ -121,6 +116,11 @@ impl MainWindowTracker {
     }
 
     pub fn is_globally_frontmost(&self, pid: pid_t) -> bool { self.global_frontmost == Some(pid) }
+
+    pub(crate) fn confirm_native_tab_focus(&mut self, window: WindowId) {
+        self.window_server_focus_authoritative = true;
+        self.window_server_focus = Some(window);
+    }
 }
 
 #[cfg(test)]

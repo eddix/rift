@@ -1200,7 +1200,13 @@ impl Reactor {
                 if self.main_window_tracker.is_globally_frontmost(*pid)
         );
 
-        let raised_window = self.main_window_tracker.handle_event(&event);
+        // Native-tab transitions must pass the layout identity compare-and-swap
+        // before they are allowed to replace authoritative focus.
+        let raised_window = if matches!(&event, Event::NativeTabFocused { .. }) {
+            None
+        } else {
+            self.main_window_tracker.handle_event(&event)
+        };
         match event {
             Event::ApplicationLaunched {
                 pid,
@@ -1296,7 +1302,7 @@ impl Reactor {
                 window,
                 window_server_info,
             } => {
-                return native_tab_workflow::handle_native_tab_focused(
+                let outcome = native_tab_workflow::handle_native_tab_focused(
                     &mut self.state,
                     &mut self.layout_manager,
                     &self.transaction_manager,
@@ -1306,7 +1312,11 @@ impl Reactor {
                         window,
                         window_server_info,
                     },
-                );
+                )?;
+                if outcome.focused_window == Some(current) {
+                    self.main_window_tracker.confirm_native_tab_focus(current);
+                }
+                return Ok(outcome);
             }
             Event::RegisterWmSender(sender) => {
                 return Ok(system_workflow::handle_register_wm_sender(

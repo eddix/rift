@@ -4044,6 +4044,7 @@ fn native_tab_focus_replaces_the_existing_layout_slot() {
     assert!(reactor.assign_test_window_to_workspace(space, previous, target_workspace));
     assert!(reactor.set_test_active_workspace(space, target_workspace));
     reactor.state.windows.mark_window_server_observed(current_wsid);
+    let _ = apps.requests();
 
     let frame = reactor.state.windows.window(previous).expect("previous tab").frame_monotonic;
     reactor.handle_event(Event::NativeTabFocused {
@@ -4070,6 +4071,11 @@ fn native_tab_focus_replaces_the_existing_layout_slot() {
     assert!(reactor.state.windows.is_window_visible(current_wsid));
     assert!(!reactor.state.windows.is_window_server_observed(current_wsid));
     assert_eq!(reactor.main_window(), Some(current));
+    let requests = apps.requests();
+    assert!(
+        requests.iter().all(|request| !matches!(request, Request::GetVisibleWindows)),
+        "native tab replacement must not feed a global AX refresh back into the burst: {requests:?}"
+    );
     let layout = reactor.query_layout_state(Some(space.get()), Some(1)).expect("layout");
     assert_eq!(layout.tiled_windows, vec![current.into()]);
 }
@@ -4112,6 +4118,49 @@ fn native_tab_focus_can_switch_back_to_a_previously_hidden_tab() {
     assert_eq!(reactor.main_window(), Some(first));
     assert!(reactor.state.windows.contains_window(first));
     assert!(!reactor.state.windows.contains_window(second));
+}
+
+#[test]
+fn stale_native_tab_transition_cannot_restore_an_intermediate_tab() {
+    let (mut apps, mut reactor) = test_context();
+    let screen = CGRect::new(CGPoint::new(0., 0.), CGSize::new(1000., 1000.));
+    let space = SpaceId::new(1);
+    let first = WindowId::new(1, 1);
+    let second = WindowId::new(1, 2);
+    let third = WindowId::new(1, 3);
+    let second_wsid = WindowServerId::new(10_002);
+    let third_wsid = WindowServerId::new(10_003);
+
+    reactor.handle_event(space_state_event(vec![screen], vec![Some(space)]));
+    make_active_app(&mut apps, &mut reactor, 1, make_windows(1), Some(first));
+    let frame = reactor.state.windows.window(first).expect("first tab").frame_monotonic;
+
+    for (previous, current, current_wsid, title) in [
+        (first, second, second_wsid, "Tab 2"),
+        (second, third, third_wsid, "Tab 3"),
+        (first, second, second_wsid, "stale Tab 2"),
+    ] {
+        reactor.handle_event(Event::NativeTabFocused {
+            previous,
+            current,
+            window: make_window_info(frame, Some(current_wsid), title, Some("com.testapp1")),
+            window_server_info: Some(WindowServerInfo {
+                id: current_wsid,
+                pid: current.pid,
+                layer: 0,
+                frame,
+                min_frame: CGSize::ZERO,
+                max_frame: CGSize::ZERO,
+            }),
+        });
+    }
+
+    let layout = reactor.query_layout_state(Some(space.get()), None).expect("layout");
+    assert_eq!(layout.tiled_windows, vec![third.into()]);
+    assert_eq!(reactor.main_window(), Some(third));
+    assert!(!reactor.state.windows.contains_window(first));
+    assert!(!reactor.state.windows.contains_window(second));
+    assert!(reactor.state.windows.contains_window(third));
 }
 
 #[test]
@@ -4197,7 +4246,7 @@ fn native_tab_focus_rekeys_every_workspace_layout_mode() {
 }
 
 #[test]
-fn focused_tab_event_with_a_different_frame_adds_a_regular_window() {
+fn focused_tab_event_with_a_different_frame_is_ignored() {
     let (mut apps, mut reactor) = test_context();
     let screen = CGRect::new(CGPoint::new(0., 0.), CGSize::new(1000., 1000.));
     let space = SpaceId::new(1);
@@ -4228,13 +4277,14 @@ fn focused_tab_event_with_a_different_frame_adds_a_regular_window() {
     });
 
     let layout = reactor.query_layout_state(Some(space.get()), None).expect("layout");
-    assert_eq!(layout.tiled_windows.len(), 2);
+    assert_eq!(layout.tiled_windows, vec![previous.into()]);
+    assert_eq!(reactor.main_window(), Some(previous));
     assert!(reactor.state.windows.contains_window(previous));
-    assert!(reactor.state.windows.contains_window(current));
+    assert!(!reactor.state.windows.contains_window(current));
 }
 
 #[test]
-fn focused_tab_event_without_window_server_identity_adds_a_regular_window() {
+fn focused_tab_event_without_window_server_identity_is_ignored() {
     let (mut apps, mut reactor) = test_context();
     let screen = CGRect::new(CGPoint::new(0., 0.), CGSize::new(1000., 1000.));
     let space = SpaceId::new(1);
@@ -4252,9 +4302,10 @@ fn focused_tab_event_without_window_server_identity_adds_a_regular_window() {
     });
 
     let layout = reactor.query_layout_state(Some(space.get()), None).expect("layout");
-    assert_eq!(layout.tiled_windows.len(), 2);
+    assert_eq!(layout.tiled_windows, vec![previous.into()]);
+    assert_eq!(reactor.main_window(), Some(previous));
     assert!(reactor.state.windows.contains_window(previous));
-    assert!(reactor.state.windows.contains_window(current));
+    assert!(!reactor.state.windows.contains_window(current));
 }
 
 #[test]
