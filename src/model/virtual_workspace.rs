@@ -615,6 +615,13 @@ impl WorkspaceStore {
         })
     }
 
+    pub fn workspace_index(
+        &self,
+        space: SpaceId,
+        workspace_id: VirtualWorkspaceId,
+    ) -> Option<usize> {
+        self.workspace_ids(space).iter().position(|id| *id == workspace_id)
+    }
     pub fn set_active_workspace(
         &mut self,
         space: SpaceId,

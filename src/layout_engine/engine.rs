@@ -108,6 +108,16 @@ pub struct ResolvedWindow {
     pub(crate) effects: AppRuleEffects,
 }
 
+#[derive(Debug, Clone, Copy)]
+pub(crate) struct WorkspaceDisplayMove {
+    pub(crate) source_space: SpaceId,
+    pub(crate) target_space: SpaceId,
+    pub(crate) target_screen_size: CGSize,
+    pub(crate) window: WindowId,
+    pub(crate) target_workspace_index: usize,
+    pub(crate) focus_target: bool,
+}
+
 #[non_exhaustive]
 #[derive(Debug, Clone)]
 pub enum LayoutEvent {
@@ -3104,6 +3114,99 @@ impl LayoutEngine {
         }
     }
 
+    pub(crate) fn move_window_to_workspace_index_on_space(
+        &mut self,
+        window_store: &mut WindowStore,
+        request: WorkspaceDisplayMove,
+    ) -> EventResponse {
+        let WorkspaceDisplayMove {
+            source_space,
+            target_space,
+            target_screen_size,
+            window: window_id,
+            target_workspace_index,
+            focus_target,
+        } = request;
+        if source_space == target_space {
+            return EventResponse::default();
+        }
+
+        self.workspaces.ensure_space_initialized(source_space);
+        let Some(target_workspace_id) =
+            self.workspaces.workspace_id_at(target_space, Some(target_workspace_index))
+        else {
+            return EventResponse::default();
+        };
+
+        let source_workspace = window_store
+            .workspace_for_window(source_space, window_id)
+            .or_else(|| self.workspaces.active_workspace(source_space));
+        let Some(source_workspace_id) = source_workspace else {
+            return EventResponse::default();
+        };
+
+        let was_focused = self.focused_window == Some(window_id);
+        self.ensure_workspace_layouts(target_space, target_screen_size);
+        if !self.relocate_window_to_workspace(
+            window_store,
+            (source_space, source_workspace_id),
+            (target_space, target_workspace_id),
+            window_id,
+            false,
+        ) {
+            return EventResponse::default();
+        }
+
+        let activated_target = focus_target
+            && self.workspaces.active_workspace(target_space) != Some(target_workspace_id)
+            && self
+                .workspaces
+                .set_active_workspace(target_space, target_workspace_id);
+        if activated_target {
+            self.update_active_floating_windows(window_store, target_space);
+            self.broadcast_workspace_changed(target_space);
+        }
+
+        if self.workspaces.last_focused_window(source_space, source_workspace_id) == Some(window_id)
+        {
+            self.workspaces
+                .set_last_focused_window(source_space, source_workspace_id, None);
+        }
+
+        let replacement_focus = (!focus_target && was_focused)
+            .then(|| {
+                self.workspaces
+                    .active_workspace(source_space)
+                    .filter(|workspace| *workspace == source_workspace_id)
+                    .and_then(|workspace| {
+                        self.preferred_focus_for_workspace(
+                            window_store,
+                            source_space,
+                            workspace,
+                            None,
+                        )
+                    })
+            })
+            .flatten();
+        if focus_target {
+            self.workspaces
+                .set_last_focused_window(target_space, target_workspace_id, Some(window_id));
+            self.focused_window = Some(window_id);
+            if self.floating.is_floating(window_id) {
+                self.floating.set_last_focus(Some(window_id));
+            }
+        }
+
+        self.broadcast_windows_changed(window_store, source_space);
+        self.broadcast_windows_changed(window_store, target_space);
+        EventResponse {
+            changed: true,
+            raise_windows: focus_target.then_some(window_id).into_iter().collect(),
+            focus_window: focus_target.then_some(window_id).or(replacement_focus),
+            boundary_hit: None,
+        }
+    }
+
     /// Moves the active workspace to the same workspace ordinal on another display.
     pub fn move_active_workspace_to_space(
         &mut self,
@@ -3323,6 +3426,16 @@ impl LayoutEngine {
 
     pub fn remove_floating_position(&mut self, window: WindowId) {
         self.floating_positions.remove_window(window);
+    }
+
+    pub fn rekey_window_identity(
+        &mut self,
+        window_store: &mut WindowStore,
+        from: WindowId,
+        to: WindowId,
+    ) {
+        window_store.transfer_persistent_window_metadata(from, to);
+        self.transfer_persistent_window_identity(from, to);
     }
 
     pub(crate) fn transfer_persistent_window_identity(&mut self, from: WindowId, to: WindowId) {
