@@ -104,6 +104,8 @@ pub enum ReactorCommand {
         window_id: WindowId,
         window_server_id: Option<u32>,
     },
+    ToggleFocusUnmanaged,
+    CycleUnmanagedWindows,
     ShowMissionControlAll,
     ShowMissionControlCurrent,
     DismissMissionControl,

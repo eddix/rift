@@ -1830,6 +1830,35 @@ mod tests {
     }
 
     #[test]
+    fn unmanaged_focus_commands_parse_from_key_bindings() {
+        #[derive(Deserialize)]
+        struct TestConfig {
+            keys: HashMap<String, WmCommand>,
+        }
+
+        let config: TestConfig = toml::from_str(
+            r#"
+            [keys]
+            toggle = "toggle_focus_unmanaged"
+            cycle = "cycle_unmanaged_windows"
+            "#,
+        )
+        .unwrap();
+
+        assert_eq!(
+            (&config.keys["toggle"], &config.keys["cycle"]),
+            (
+                &WmCommand::ReactorCommand(reactor::Command::Reactor(
+                    reactor::ReactorCommand::ToggleFocusUnmanaged
+                )),
+                &WmCommand::ReactorCommand(reactor::Command::Reactor(
+                    reactor::ReactorCommand::CycleUnmanagedWindows
+                ))
+            )
+        );
+    }
+
+    #[test]
     fn menu_bar_layout_folder_defaults_and_expands_home() {
         let settings: MenuBarSettings = toml::from_str("").unwrap();
 

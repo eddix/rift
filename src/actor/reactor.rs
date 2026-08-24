@@ -11,6 +11,7 @@ mod managers;
 mod query;
 mod replay;
 pub mod transaction_manager;
+mod unmanaged_focus;
 mod utils;
 
 #[cfg(test)]
@@ -352,6 +353,7 @@ pub struct Reactor {
     refocus_manager: managers::RefocusManager,
     refresh_quarantine_manager: managers::RefreshQuarantineManager,
     pending_space_change_manager: managers::PendingSpaceChangeManager,
+    unmanaged_focus_history: unmanaged_focus::History,
     active_spaces: HashSet<SpaceId>,
     pub animation_tx: Option<AnimationSender>,
     #[cfg(test)]
@@ -480,6 +482,7 @@ impl Reactor {
             pending_space_change_manager: managers::PendingSpaceChangeManager {
                 pending_space_change: None,
             },
+            unmanaged_focus_history: unmanaged_focus::History::default(),
             active_spaces: HashSet::default(),
             animation_tx: None,
             #[cfg(test)]
@@ -1207,6 +1210,9 @@ impl Reactor {
         } else {
             self.main_window_tracker.handle_event(&event)
         };
+        if let Event::WindowServerFocusChanged(window, space) = &event {
+            self.remember_unmanaged_focus(*window, *space);
+        }
         match event {
             Event::ApplicationLaunched {
                 pid,
@@ -1236,10 +1242,12 @@ impl Reactor {
                 return Ok(outcome);
             }
             Event::ApplicationTerminated(pid) => {
+                self.unmanaged_focus_history.remove_app(pid);
                 return application_workflow::handle_application_terminated(pid);
             }
             Event::ApplicationThreadTerminated(pid) => {
                 self.forget_window_inventory(pid);
+                self.unmanaged_focus_history.remove_app(pid);
                 self.clear_menu_state_for_pid(pid);
                 return application_workflow::handle_application_thread_terminated(
                     &mut self.app_manager,
@@ -1287,6 +1295,9 @@ impl Reactor {
                 }
                 if !self.state.windows.contains_window(window) {
                     self.request_window_inventory(window.pid);
+                    return Ok(EventOutcome::default());
+                }
+                if !self.state.windows.window(window).is_some_and(WindowState::is_admitted) {
                     return Ok(EventOutcome::default());
                 }
                 return Ok(if self.is_space_active(reported_space) {
@@ -1382,6 +1393,7 @@ impl Reactor {
                 return Ok(outcome);
             }
             Event::WindowDestroyed(wid) => {
+                self.unmanaged_focus_history.remove_window(wid);
                 // macOS can replace AXUIElements during lifecycle/display churn while the
                 // native window remains alive. Recovery already schedules a stable refresh,
                 // so preserve topology until then. Outside churn, retain the original AX
@@ -1842,6 +1854,12 @@ impl Reactor {
                     &mut self.space_activation_policy,
                     command_workflow::ToggleSpacePayload { config, space, display_uuid },
                 );
+            }
+            Event::Command(Command::Reactor(ReactorCommand::ToggleFocusUnmanaged)) => {
+                return Ok(self.handle_unmanaged_focus_command(unmanaged_focus::Action::Toggle));
+            }
+            Event::Command(Command::Reactor(ReactorCommand::CycleUnmanagedWindows)) => {
+                return Ok(self.handle_unmanaged_focus_command(unmanaged_focus::Action::Cycle));
             }
             Event::Command(Command::Reactor(ReactorCommand::ShowMissionControlAll)) => {
                 return command_workflow::handle_mission_control_command(
@@ -4499,6 +4517,81 @@ impl Reactor {
             return None;
         }
         Some(wid)
+    }
+
+    fn explicitly_unmanaged_windows_in_space(&self, space: SpaceId) -> Vec<WindowId> {
+        let mut seen = HashSet::default();
+        window_server::space_window_list_for_connection(&[space.get()], 0, false)
+            .into_iter()
+            .map(WindowServerId::new)
+            .filter_map(|window_server_id| {
+                let window_id = self.state.windows.tracked_window_id(window_server_id)?;
+                let window = self.state.windows.window(window_id)?;
+                (window.manage_override == Some(false)
+                    && window.info.is_standard
+                    && window.info.is_root
+                    && !window.info.is_minimized
+                    && seen.insert(window_id))
+                .then_some(window_id)
+            })
+            .collect()
+    }
+
+    fn remember_unmanaged_focus(&mut self, window_id: WindowId, space: SpaceId) {
+        let explicitly_unmanaged = self
+            .state
+            .windows
+            .window(window_id)
+            .is_some_and(|window| window.manage_override == Some(false));
+        if !explicitly_unmanaged {
+            return;
+        }
+        let Some(display) = self
+            .space_state
+            .screen_by_space(space)
+            .and_then(ScreenInfo::display_uuid_opt)
+            .map(str::to_owned)
+        else {
+            return;
+        };
+        self.unmanaged_focus_history.record(&display, window_id);
+    }
+
+    fn handle_unmanaged_focus_command(&mut self, action: unmanaged_focus::Action) -> EventOutcome {
+        let Some(space) = self.active_display_space() else {
+            return EventOutcome::no_change();
+        };
+        let Some(display) = self
+            .space_state
+            .screen_by_space(space)
+            .and_then(ScreenInfo::display_uuid_opt)
+            .map(str::to_owned)
+        else {
+            return EventOutcome::no_change();
+        };
+        let candidates = self.explicitly_unmanaged_windows_in_space(space);
+        let current = self.main_window();
+        let last_managed = self.last_focused_window_in_space(space);
+        let target = self.unmanaged_focus_history.target(
+            &display,
+            &candidates,
+            current,
+            last_managed,
+            action,
+        );
+        let Some(target) = target.filter(|target| Some(*target) != current) else {
+            return EventOutcome::no_change();
+        };
+
+        EventOutcome::no_change().with_layout_response(
+            layout::EventResponse {
+                changed: false,
+                raise_windows: Vec::new(),
+                focus_window: Some(target),
+                boundary_hit: None,
+            },
+            None,
+        )
     }
 
     fn visible_focus_candidate_in_active_workspace(

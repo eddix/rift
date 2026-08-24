@@ -189,6 +189,10 @@ enum WindowCommands {
     },
     /// Toggle window floating state
     ToggleFloat,
+    /// Toggle focus between the active workspace and its most recent unmanaged window
+    ToggleFocusUnmanaged,
+    /// Focus the next unmanaged window on the active display
+    CycleUnmanaged,
     /// Toggle fullscreen mode (fills the whole screen, ignores outer gaps)
     ToggleFullscreen,
     /// Toggle fullscreen within configured outer gaps (respects outer gaps / fills tiling area)
@@ -753,6 +757,12 @@ fn map_window_command(cmd: WindowCommands) -> Result<CliCommand, String> {
         WindowCommands::ToggleFloat => Ok(CliCommand::Reactor(reactor::Command::Layout(
             LC::ToggleWindowFloating,
         ))),
+        WindowCommands::ToggleFocusUnmanaged => Ok(CliCommand::Reactor(reactor::Command::Reactor(
+            reactor::ReactorCommand::ToggleFocusUnmanaged,
+        ))),
+        WindowCommands::CycleUnmanaged => Ok(CliCommand::Reactor(reactor::Command::Reactor(
+            reactor::ReactorCommand::CycleUnmanagedWindows,
+        ))),
         WindowCommands::ToggleFullscreen => Ok(CliCommand::Reactor(reactor::Command::Layout(
             LC::ToggleFullscreen,
         ))),
@@ -1180,6 +1190,33 @@ mod tests {
             serde_json::json!({
                 "execute_command": { "command": { "config": { "set_animate": true } } }
             })
+        );
+    }
+
+    #[test]
+    fn unmanaged_focus_cli_uses_reactor_commands() {
+        let toggle = build_execute_request(ExecuteCommands::Window {
+            window_cmd: WindowCommands::ToggleFocusUnmanaged,
+        })
+        .unwrap();
+        let cycle = build_execute_request(ExecuteCommands::Window {
+            window_cmd: WindowCommands::CycleUnmanaged,
+        })
+        .unwrap();
+
+        assert_eq!(
+            (
+                serde_json::to_value(toggle).unwrap(),
+                serde_json::to_value(cycle).unwrap()
+            ),
+            (
+                serde_json::json!({
+                    "execute_command": { "command": { "reactor": "toggle_focus_unmanaged" } }
+                }),
+                serde_json::json!({
+                    "execute_command": { "command": { "reactor": "cycle_unmanaged_windows" } }
+                })
+            )
         );
     }
 }

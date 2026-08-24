@@ -407,6 +407,7 @@ comb1 = "Alt + Shift"
 # - consume_or_expel_window = "left"|"right"|"up"|"down"
 # - toggle_stack / toggle_orientation / unjoin_windows
 # - toggle_focus_floating / toggle_window_floating / toggle_fullscreen / toggle_fullscreen_within_gaps
+# - toggle_focus_unmanaged / cycle_unmanaged_windows
 # - resize_window_grow / resize_window_shrink (without param, horizontal is default)
 # - resize_window_grow = "horizontal"|"vertical"|"smart"
 # - resize_window_shrink = "horizontal"|"vertical"|"smart"
@@ -472,6 +473,10 @@ comb1 = "Alt + Shift"
 "Alt + F" = "toggle_fullscreen"
 "Alt + Shift + F" = "toggle_fullscreen_within_gaps"
 "comb1 + Ctrl + Space" = "toggle_focus_floating" # briefly bring focus to floating window
+# Toggle between the active workspace and its most recently focused manage=false window.
+# "Alt + U" = "toggle_focus_unmanaged"
+# Cycle manage=false windows on the active display without changing their frames.
+# "Alt + Shift + U" = "cycle_unmanaged_windows"
 
 # smartly resize windows
 "Alt + Shift + Equal" = "resize_window_grow"

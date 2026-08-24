@@ -1401,6 +1401,42 @@ fn cross_display_drag_keeps_an_explicitly_unmanaged_window_unassigned() {
 }
 
 #[test]
+fn unmanaged_focus_command_targets_the_mru_window_on_the_active_display() {
+    let (mut reactor, _managed, _managed_wsid, space, _other_space, frame) =
+        reactor_with_window_on_space1();
+    let unmanaged = WindowId::new(2, 1);
+    let unmanaged_wsid = WindowServerId::new(202);
+    reactor.add_test_app(unmanaged.pid);
+    reactor.add_test_window(unmanaged, unmanaged_wsid, Some(space), frame);
+    reactor.state.windows.window_mut(unmanaged).unwrap().manage_override = Some(false);
+    reactor.state.windows.mark_window_visible(unmanaged_wsid);
+    reactor.remember_unmanaged_focus(unmanaged, space);
+    crate::sys::window_server::set_space_window_list_for_space_override(
+        space.get(),
+        Some(vec![unmanaged_wsid.as_u32()]),
+    );
+
+    let outcome = reactor
+        .dispatch_workflow(Event::Command(Command::Reactor(
+            ReactorCommand::ToggleFocusUnmanaged,
+        )))
+        .unwrap();
+
+    crate::sys::window_server::set_space_window_list_for_space_override(space.get(), None);
+    assert_eq!(outcome.layout_responses[0].0.focus_window, Some(unmanaged));
+}
+
+#[test]
+fn unmanaged_window_server_focus_does_not_enter_the_layout_engine() {
+    let (mut reactor, wid, _wsid, space, _other_space, _frame) = reactor_with_window_on_space1();
+    make_window_explicitly_unmanaged(&mut reactor, wid);
+
+    let outcome = reactor.dispatch_workflow(Event::WindowServerFocusChanged(wid, space)).unwrap();
+
+    assert!(outcome.layout_events.is_empty());
+}
+
+#[test]
 fn duplicate_minimize_deminimize_and_unknown_window_events_do_not_arrange() {
     let (mut reactor, wid, _wsid, _space1, _space2, _frame) = reactor_with_window_on_space1();
 
