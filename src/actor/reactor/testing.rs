@@ -248,6 +248,7 @@ impl Reactor {
                 path: None,
                 ax_role: None,
                 ax_subrole: None,
+                ax_identifier: None,
             },
             frame_monotonic: frame,
             is_manageable,
@@ -430,6 +431,7 @@ pub fn make_window_info(
         path: None,
         ax_role: None,
         ax_subrole: None,
+        ax_identifier: None,
     }
 }
 
