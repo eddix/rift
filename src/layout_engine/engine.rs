@@ -1691,6 +1691,7 @@ impl LayoutEngine {
                             window_title: info.title.as_deref(),
                             ax_role: info.ax_role.as_deref(),
                             ax_subrole: info.ax_subrole.as_deref(),
+                            ax_identifier: None,
                         },
                         false,
                     ) else {

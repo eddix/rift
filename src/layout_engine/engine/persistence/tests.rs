@@ -149,6 +149,7 @@ fn restored_workspace_is_resolved_before_app_rule_assignment() {
                 window_title: Some("Restored terminal"),
                 ax_role: None,
                 ax_subrole: None,
+                ax_identifier: None,
             },
             false,
         )
