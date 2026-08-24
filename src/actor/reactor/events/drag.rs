@@ -28,7 +28,15 @@ pub fn handle_mouse_up(
     let mut outcome = EventOutcome::layout_changed(false);
     let mut needs_layout = false;
 
-    if let Some((dragged, target)) = payload.pending_swap {
+    let session = match std::mem::replace(&mut drag.drag_state, DragState::Inactive) {
+        DragState::Active { session } | DragState::PendingSwap { session, .. } => Some(session),
+        DragState::Inactive => None,
+    };
+    let dragged_is_admitted = session.as_ref().is_some_and(|session| {
+        state.windows.window(session.window).is_some_and(WindowState::is_admitted)
+    });
+
+    if dragged_is_admitted && let Some((dragged, target)) = payload.pending_swap {
         trace!(?dragged, ?target, "performing deferred drag swap");
         drag.skip_layout_for_window = Some(dragged);
         if state.windows.contains_window(dragged) && state.windows.contains_window(target) {
@@ -44,13 +52,18 @@ pub fn handle_mouse_up(
         needs_layout = true;
     }
 
-    let session = match std::mem::replace(&mut drag.drag_state, DragState::Inactive) {
-        DragState::Active { session } | DragState::PendingSwap { session, .. } => Some(session),
-        DragState::Inactive => None,
-    };
     if let Some(session) = session {
         let window = session.window;
-        if session.origin_space != payload.final_space {
+        if !dragged_is_admitted {
+            if let Some(server_id) =
+                state.windows.window(window).and_then(|window| window.info.sys_id)
+            {
+                state.windows.set_window_server_space(server_id, payload.final_space);
+                if payload.final_space.is_some() {
+                    state.windows.mark_window_visible(server_id);
+                }
+            }
+        } else if session.origin_space != payload.final_space {
             if session.origin_space.is_some() {
                 outcome = outcome.with_layout_event(LayoutEvent::WindowRemoved(window));
             }
@@ -89,7 +102,8 @@ pub fn handle_mouse_up(
             needs_layout = true;
         }
 
-        if let Some(space) = payload.final_space
+        if dragged_is_admitted
+            && let Some(space) = payload.final_space
             && layout.layout_engine.is_window_floating(window)
         {
             if session.origin_space != payload.final_space {

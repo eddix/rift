@@ -975,6 +975,15 @@ fn reactor_with_window_on_space1_two_displays() -> (
     (reactor, wid, wsid, space1, space2, initial_frame, screen2)
 }
 
+fn make_window_explicitly_unmanaged(reactor: &mut Reactor, wid: WindowId) {
+    reactor
+        .layout_manager
+        .layout_engine
+        .virtual_workspace_manager_mut()
+        .remove_window(&mut reactor.state.windows, wid);
+    reactor.state.windows.window_mut(wid).unwrap().manage_override = Some(false);
+}
+
 fn reactor_with_floating_window() -> (Reactor, WindowId, SpaceId, CGRect, CGRect) {
     let (mut reactor, wid, _wsid, space1, _space2, screen) = reactor_with_window_on_space1();
     reactor.send_layout_event(LayoutEvent::WindowAdded(space1, wid));
@@ -1355,6 +1364,40 @@ fn unmanageable_window_crossing_spaces_is_not_reinserted_into_layout() {
     assert_eq!(reactor.state.windows.window_server_space(wsid), Some(space2));
     assert_eq!(reactor.assigned_space_for_window_id(wid), None);
     assert!(!has_window_in_layout(&mut reactor, space2, screen2, wid));
+}
+
+#[test]
+fn window_added_does_not_assign_an_explicitly_unmanaged_window() {
+    let (mut reactor, wid, _wsid, space1, _space2, _frame) = reactor_with_window_on_space1();
+    make_window_explicitly_unmanaged(&mut reactor, wid);
+
+    reactor.send_layout_event(LayoutEvent::WindowAdded(space1, wid));
+
+    assert_eq!(reactor.assigned_space_for_window_id(wid), None);
+}
+
+#[test]
+fn cross_display_drag_keeps_an_explicitly_unmanaged_window_unassigned() {
+    let (mut reactor, wid, wsid, _space1, space2, initial_frame, screen2) =
+        reactor_with_window_on_space1_two_displays();
+    make_window_explicitly_unmanaged(&mut reactor, wid);
+    let moved_frame = CGRect::new(
+        CGPoint::new(screen2.origin.x + 120.0, initial_frame.origin.y),
+        initial_frame.size,
+    );
+
+    reactor.handle_event(Event::WindowFrameChanged(
+        wid,
+        moved_frame,
+        None,
+        Requested(false),
+        Some(MouseState::Down),
+    ));
+    reactor.handle_event(Event::MouseUp);
+
+    assert_eq!(reactor.assigned_space_for_window_id(wid), None);
+    assert_eq!(reactor.state.windows.window_server_space(wsid), Some(space2));
+    assert!(matches!(reactor.drag_manager.drag_state, DragState::Inactive));
 }
 
 #[test]

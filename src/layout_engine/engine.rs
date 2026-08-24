@@ -1119,6 +1119,13 @@ impl LayoutEngine {
         space: SpaceId,
         wid: WindowId,
     ) -> bool {
+        if window_store
+            .window(wid)
+            .is_some_and(|window| window.manage_override == Some(false))
+        {
+            return false;
+        }
+
         let active_space_before = self.space_with_window(wid);
 
         let assigned_workspace =
