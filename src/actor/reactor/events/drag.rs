@@ -73,7 +73,21 @@ pub fn handle_mouse_up(
     drag.release_preview();
     let window = commit.source.window;
     drag.externally_controlled_window = None;
-    let mut needs_layout = commit.source.tiled;
+    let dragged_is_admitted =
+        state.windows.window(window).is_some_and(WindowState::is_admitted);
+    let mut needs_layout = commit.source.tiled && dragged_is_admitted;
+
+    if !dragged_is_admitted {
+        if let Some(server_id) =
+            state.windows.window(window).and_then(|window| window.info.sys_id)
+        {
+            state.windows.set_window_server_space(server_id, payload.final_space);
+            if payload.final_space.is_some() {
+                state.windows.mark_window_visible(server_id);
+            }
+        }
+        return Ok(outcome.with_arrange_passes(0));
+    }
 
     if let Some(target) = commit.target
         && commit.source.current_space == Some(target.intent.space)
