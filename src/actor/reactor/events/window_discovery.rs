@@ -36,6 +36,7 @@ fn sync_existing_window_state(
         existing.info.path = info.path.clone();
         existing.info.ax_role = info.ax_role.clone();
         existing.info.ax_subrole = info.ax_subrole.clone();
+        existing.info.ax_identifier = info.ax_identifier.clone();
     } else {
         return Ok(crate::actor::reactor::events::EventOutcome::default());
     }
@@ -351,6 +352,7 @@ fn assign_discovered_window_to_space(
     let title = window.info.title.clone();
     let ax_role = window.info.ax_role.clone();
     let ax_subrole = window.info.ax_subrole.clone();
+    let ax_identifier = window.info.ax_identifier.clone();
 
     layout.layout_engine.assign_window_with_app_info(
         &mut state.windows,
@@ -361,6 +363,7 @@ fn assign_discovered_window_to_space(
         Some(title.as_str()),
         ax_role.as_deref(),
         ax_subrole.as_deref(),
+        ax_identifier.as_deref(),
     )
 }
 

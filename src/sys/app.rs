@@ -378,6 +378,8 @@ pub struct WindowInfo {
     pub path: Option<PathBuf>,
     pub ax_role: Option<String>,
     pub ax_subrole: Option<String>,
+    #[serde(default)]
+    pub ax_identifier: Option<String>,
 }
 
 impl WindowInfo {
@@ -392,6 +394,7 @@ impl WindowInfo {
 
         let ax_role = Some(role.clone());
         let ax_subrole = Some(subrole.clone());
+        let ax_identifier = element.identifier().ok();
 
         let mut server_info = server_info_hint;
         let id = server_info
@@ -429,6 +432,7 @@ impl WindowInfo {
             path,
             ax_role,
             ax_subrole,
+            ax_identifier,
         };
 
         Ok((info, server_info))

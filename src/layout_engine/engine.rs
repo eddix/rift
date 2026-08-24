@@ -1436,6 +1436,7 @@ impl LayoutEngine {
                         info.title.as_deref(),
                         info.ax_role.as_deref(),
                         info.ax_subrole.as_deref(),
+                        None,
                     ) else {
                         continue;
                     };
@@ -2762,6 +2763,7 @@ impl LayoutEngine {
         window_title: Option<&str>,
         ax_role: Option<&str>,
         ax_subrole: Option<&str>,
+        ax_identifier: Option<&str>,
     ) -> Result<AppRuleResult, crate::model::virtual_workspace::WorkspaceError> {
         self.assign_window_with_app_info_policy(
             window_store,
@@ -2772,6 +2774,7 @@ impl LayoutEngine {
             window_title,
             ax_role,
             ax_subrole,
+            ax_identifier,
             false,
         )
     }
@@ -2786,6 +2789,7 @@ impl LayoutEngine {
         window_title: Option<&str>,
         ax_role: Option<&str>,
         ax_subrole: Option<&str>,
+        ax_identifier: Option<&str>,
     ) -> Result<AppRuleResult, crate::model::virtual_workspace::WorkspaceError> {
         self.assign_window_with_app_info_policy(
             window_store,
@@ -2796,6 +2800,7 @@ impl LayoutEngine {
             window_title,
             ax_role,
             ax_subrole,
+            ax_identifier,
             true,
         )
     }
@@ -2810,6 +2815,7 @@ impl LayoutEngine {
         window_title: Option<&str>,
         ax_role: Option<&str>,
         ax_subrole: Option<&str>,
+        ax_identifier: Option<&str>,
         reapply_workspace_rule: bool,
     ) -> Result<AppRuleResult, crate::model::virtual_workspace::WorkspaceError> {
         let observation = window_store.window(window_id).map(|window| {
@@ -2836,6 +2842,7 @@ impl LayoutEngine {
             window_title,
             ax_role,
             ax_subrole,
+            ax_identifier,
         };
         let mut decision = if reapply_workspace_rule {
             self.app_rules.evaluate_for_title_change(context)
@@ -3363,6 +3370,7 @@ mod tests {
             title_substring: None,
             ax_role: None,
             ax_subrole: None,
+            ax_identifier_regex: None,
         }];
         let mut engine = LayoutEngine::new(&settings, &LayoutSettings::default(), None);
         let mut window_store = WindowStore::default();
@@ -3438,6 +3446,7 @@ mod tests {
             title_substring: None,
             ax_role: None,
             ax_subrole: None,
+            ax_identifier_regex: None,
         }];
         let mut layout_settings = LayoutSettings::default();
         layout_settings.scrolling.min_column_width_ratio = 0.1;

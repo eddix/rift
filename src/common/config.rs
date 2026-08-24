@@ -109,6 +109,10 @@ pub struct AppWorkspaceRule {
     /// non-empty string and will be compared against the accessibility subrole
     /// reported by the AX APIs for a window (exact string match).
     pub ax_subrole: Option<String>,
+
+    /// Optional: Regular expression to match the accessibility identifier
+    /// reported by AXIdentifier.
+    pub ax_identifier_regex: Option<String>,
 }
 
 #[derive(Serialize, Deserialize, Debug, PartialEq, Clone, Copy)]
@@ -175,6 +179,7 @@ impl VirtualWorkspaceSettings {
         let mut seen_title_substrings = crate::common::collections::HashSet::default();
         let mut seen_ax_roles = crate::common::collections::HashSet::default();
         let mut seen_ax_subroles = crate::common::collections::HashSet::default();
+        let mut seen_ax_identifier_regexes = crate::common::collections::HashSet::default();
 
         for (index, rule) in self.app_rules.iter().enumerate() {
             let app_id_empty = rule.app_id.as_ref().map_or(true, |id| id.is_empty());
@@ -184,11 +189,9 @@ impl VirtualWorkspaceSettings {
                 && rule.title_substring.is_none()
                 && rule.ax_role.is_none()
                 && rule.ax_subrole.is_none()
+                && rule.ax_identifier_regex.is_none()
             {
-                issues.push(format!(
-                    "App rule {} has no app_id, app_name, title_regex, or title_substring specified",
-                    index
-                ));
+                issues.push(format!("App rule {} has no matcher specified", index));
             }
 
             if let Some(ref workspace) = rule.workspace {
@@ -250,7 +253,8 @@ impl VirtualWorkspaceSettings {
                     || rule.title_regex.is_some()
                     || rule.title_substring.is_some()
                     || rule.ax_role.is_some()
-                    || rule.ax_subrole.is_some();
+                    || rule.ax_subrole.is_some()
+                    || rule.ax_identifier_regex.is_some();
                 if !app_id.is_empty() && !has_specific_match && !seen_app_ids.insert(app_id) {
                     issues.push(format!("Duplicate app_id '{}' in rule {}", app_id, index));
                 }
@@ -314,6 +318,22 @@ impl VirtualWorkspaceSettings {
                     issues.push(format!("App rule {} has empty ax_subrole", index));
                 } else if !seen_ax_subroles.insert(ax_sub) {
                     issues.push(format!("Duplicate ax_subrole '{}' in rule {}", ax_sub, index));
+                }
+            }
+
+            if let Some(ref identifier_re) = rule.ax_identifier_regex {
+                if identifier_re.is_empty() {
+                    issues.push(format!("App rule {} has empty ax_identifier_regex", index));
+                } else if let Err(error) = RegexBuilder::new(identifier_re).build() {
+                    issues.push(format!(
+                        "App rule {} has invalid ax_identifier_regex '{}': {}",
+                        index, identifier_re, error
+                    ));
+                } else if !seen_ax_identifier_regexes.insert(identifier_re) {
+                    issues.push(format!(
+                        "Duplicate ax_identifier_regex '{}' in rule {}",
+                        identifier_re, index
+                    ));
                 }
             }
         }
@@ -1696,6 +1716,35 @@ mod tests {
     }
 
     #[test]
+    fn app_rules_parse_and_validate_ax_identifier_regex() {
+        let settings: VirtualWorkspaceSettings = toml::from_str(
+            r#"
+                app_rules = [{
+                    app_id = "company.thebrowser.Browser",
+                    ax_identifier_regex = "^littleBrowserWindow-",
+                    manage = false
+                }]
+            "#,
+        )
+        .unwrap();
+
+        assert_eq!(
+            settings.app_rules[0].ax_identifier_regex.as_deref(),
+            Some("^littleBrowserWindow-")
+        );
+        assert!(settings.validate().is_empty());
+
+        let invalid: VirtualWorkspaceSettings =
+            toml::from_str(r#"app_rules = [{ ax_identifier_regex = "[" }]"#).unwrap();
+        assert!(
+            invalid
+                .validate()
+                .iter()
+                .any(|issue| issue.contains("invalid ax_identifier_regex"))
+        );
+    }
+
+    #[test]
     fn app_rule_geometry_validation_rejects_invalid_values() {
         let mut settings = VirtualWorkspaceSettings::default();
         settings.app_rules.push(AppWorkspaceRule {
@@ -1714,6 +1763,7 @@ mod tests {
             title_substring: None,
             ax_role: None,
             ax_subrole: None,
+            ax_identifier_regex: None,
         });
 
         let issues = settings.validate();

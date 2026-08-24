@@ -3829,6 +3829,7 @@ impl Reactor {
                             window.info.title.clone(),
                             window.info.ax_role.clone(),
                             window.info.ax_subrole.clone(),
+                            window.info.ax_identifier.clone(),
                         )
                     });
                     let engine = &mut self.layout_manager.layout_engine;
@@ -3842,6 +3843,7 @@ impl Reactor {
                             window_metadata.as_ref().map(|metadata| metadata.0.as_str()),
                             window_metadata.as_ref().and_then(|metadata| metadata.1.as_deref()),
                             window_metadata.as_ref().and_then(|metadata| metadata.2.as_deref()),
+                            window_metadata.as_ref().and_then(|metadata| metadata.3.as_deref()),
                         )
                     } else {
                         engine.assign_window_with_app_info(
@@ -3853,6 +3855,7 @@ impl Reactor {
                             window_metadata.as_ref().map(|metadata| metadata.0.as_str()),
                             window_metadata.as_ref().and_then(|metadata| metadata.1.as_deref()),
                             window_metadata.as_ref().and_then(|metadata| metadata.2.as_deref()),
+                            window_metadata.as_ref().and_then(|metadata| metadata.3.as_deref()),
                         )
                     }
                 };

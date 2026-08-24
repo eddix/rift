@@ -15,6 +15,7 @@ pub struct WindowRuleContext<'a> {
     pub window_title: Option<&'a str>,
     pub ax_role: Option<&'a str>,
     pub ax_subrole: Option<&'a str>,
+    pub ax_identifier: Option<&'a str>,
 }
 
 #[derive(Debug, Clone, PartialEq, Default)]
@@ -187,6 +188,7 @@ struct CompiledRule {
     title_substring: Option<String>,
     ax_role: Option<String>,
     ax_subrole: Option<String>,
+    ax_identifier_regex: Option<Regex>,
     specificity: usize,
     index: usize,
 }
@@ -273,6 +275,7 @@ impl CompiledRule {
             title_substring,
             ax_role,
             ax_subrole,
+            ax_identifier_regex,
         } = rule;
         let app_id = nonempty(app_id).map(|value| value.to_ascii_lowercase());
         let app_name = nonempty(app_name).map(|value| value.to_lowercase());
@@ -289,6 +292,21 @@ impl CompiledRule {
             },
             None => None,
         };
+        let ax_identifier_regex = match nonempty(ax_identifier_regex) {
+            Some(pattern) => match Regex::new(&pattern) {
+                Ok(regex) => Some(regex),
+                Err(error) => {
+                    warn!(
+                        %error,
+                        %pattern,
+                        index,
+                        "Ignoring app rule with invalid AX identifier regex"
+                    );
+                    return None;
+                }
+            },
+            None => None,
+        };
         let specificity = [
             app_id.is_some(),
             app_name.is_some(),
@@ -296,6 +314,7 @@ impl CompiledRule {
             title_substring.is_some(),
             ax_role.is_some(),
             ax_subrole.is_some(),
+            ax_identifier_regex.is_some(),
         ]
         .into_iter()
         .filter(|present| *present)
@@ -319,6 +338,7 @@ impl CompiledRule {
             title_substring,
             ax_role,
             ax_subrole,
+            ax_identifier_regex,
             specificity,
             index,
         })
@@ -344,6 +364,9 @@ impl CompiledRule {
                 .is_none_or(|rule| title.is_some_and(|actual| actual.contains(rule)))
             && self.ax_role.as_deref().is_none_or(|rule| context.ax_role == Some(rule))
             && self.ax_subrole.as_deref().is_none_or(|rule| context.ax_subrole == Some(rule))
+            && self.ax_identifier_regex.as_ref().is_none_or(|regex| {
+                context.ax_identifier.is_some_and(|actual| regex.is_match(actual))
+            })
     }
 }
 
@@ -413,6 +436,38 @@ mod tests {
             })
             .unwrap();
         assert_eq!(decision.workspace, Some(WorkspaceSelector::Index(2)));
+    }
+
+    #[test]
+    fn ax_identifier_regex_overrides_a_broader_app_rule() {
+        let ordinary_window = rule("company.thebrowser.Browser", 1);
+        let little_window = AppWorkspaceRule {
+            app_id: Some("company.thebrowser.Browser".into()),
+            manage: Some(false),
+            ax_identifier_regex: Some(r"^littleBrowserWindow-".into()),
+            ..Default::default()
+        };
+        let engine = AppRuleEngine::new(&[little_window, ordinary_window]);
+
+        let little_decision = engine
+            .evaluate(WindowRuleContext {
+                app_bundle_id: Some("company.thebrowser.Browser"),
+                ax_identifier: Some("littleBrowserWindow-984F"),
+                ..Default::default()
+            })
+            .unwrap();
+        assert_eq!(little_decision.manage, Some(false));
+        assert_eq!(little_decision.workspace, None);
+
+        let ordinary_decision = engine
+            .evaluate(WindowRuleContext {
+                app_bundle_id: Some("company.thebrowser.Browser"),
+                ax_identifier: Some("bigBrowserWindow-1778"),
+                ..Default::default()
+            })
+            .unwrap();
+        assert_eq!(ordinary_decision.manage, None);
+        assert_eq!(ordinary_decision.workspace, Some(WorkspaceSelector::Index(1)));
     }
 
     #[test]

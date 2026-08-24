@@ -182,6 +182,7 @@ impl<'de> Deserialize<'de> for RuntimeWindowData {
             path: None,
             ax_role: None,
             ax_subrole: None,
+            ax_identifier: None,
         };
 
         Ok(RuntimeWindowData {
@@ -289,6 +290,7 @@ mod tests {
             path: None,
             ax_role: None,
             ax_subrole: None,
+            ax_identifier: None,
         };
         let data = RuntimeWindowData {
             id: WindowId::new(123, 7),

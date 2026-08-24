@@ -204,6 +204,12 @@ impl AXUIElement {
         Ok(string.to_string())
     }
 
+    pub fn identifier(&self) -> Result<String> {
+        let value = self.copy_required_attribute("AXIdentifier")?;
+        let string = self.downcast::<CFString>(value)?;
+        Ok(string.to_string())
+    }
+
     pub fn minimized(&self) -> Result<bool> { self.bool_attribute("AXMinimized") }
 
     pub fn fullscreen(&self) -> Result<bool> { self.bool_attribute("AXFullscreen") }
