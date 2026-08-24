@@ -479,6 +479,23 @@ impl WorkspaceStore {
         })
     }
 
+    pub fn workspace_index(
+        &self,
+        space: SpaceId,
+        workspace_id: VirtualWorkspaceId,
+    ) -> Option<usize> {
+        self.ordered_workspace_ids(space).iter().position(|id| *id == workspace_id)
+    }
+
+    pub fn workspace_at(
+        &mut self,
+        space: SpaceId,
+        workspace_index: usize,
+    ) -> Option<VirtualWorkspaceId> {
+        self.ensure_space_initialized(space);
+        self.ordered_workspace_ids(space).get(workspace_index).copied()
+    }
+
     pub fn workspace_auto_back_and_forth(&self) -> bool { self.workspace_auto_back_and_forth }
 
     pub fn set_active_workspace(

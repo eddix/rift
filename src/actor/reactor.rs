@@ -93,7 +93,7 @@ use crate::actor::reactor::events::window_discovery;
 use crate::actor::spaces::{ForwardedSpaceState, TopologyWindowDelta};
 use crate::actor::{self, menu_bar, stack_line};
 use crate::common::collections::{BTreeMap, HashMap, HashSet};
-use crate::common::config::Config;
+use crate::common::config::{Config, WorkspaceDisplayTarget};
 use crate::layout_engine::{self as layout, Direction, LayoutEngine, LayoutEvent, ResolvedWindow};
 use crate::model::broadcast::{
     BroadcastEvent, BroadcastSender, protocol_window_id, protocol_workspace_id,
@@ -1774,13 +1774,17 @@ impl Reactor {
                 return Ok(system_workflow::handle_raise_timeout(sequence_id)?);
             }
             Event::ConfigUpdated(new_cfg) => {
-                return command_workflow::handle_config_updated(
+                let outcome = command_workflow::handle_config_updated(
                     &mut self.config,
                     &mut self.layout_manager,
                     &self.state,
                     &mut self.drag_manager,
                     new_cfg,
-                );
+                )?;
+                let windows =
+                    self.state.windows.iter_windows().map(|(window, _)| window).collect::<Vec<_>>();
+                self.reconcile_workspace_affinities(windows);
+                return Ok(outcome);
             }
             Event::Command(Command::Metrics(cmd)) => {
                 return command_workflow::handle_command_metrics(cmd);
@@ -1962,7 +1966,30 @@ impl Reactor {
             Event::Command(Command::Layout(command)) => {
                 let post_arrange_mouse_warp =
                     self.config.settings.mouse_follows_focus.then(|| self.main_window()).flatten();
-                let command_space = self.command_context_space();
+                let command = match command {
+                    layout::LayoutCommand::NextWorkspace(skip_empty) => self
+                        .workspace_index_for_affinity_navigation(Direction::Right, skip_empty)
+                        .map(layout::LayoutCommand::SwitchToWorkspace)
+                        .unwrap_or(layout::LayoutCommand::NextWorkspace(skip_empty)),
+                    layout::LayoutCommand::PrevWorkspace(skip_empty) => self
+                        .workspace_index_for_affinity_navigation(Direction::Left, skip_empty)
+                        .map(layout::LayoutCommand::SwitchToWorkspace)
+                        .unwrap_or(layout::LayoutCommand::PrevWorkspace(skip_empty)),
+                    command => command,
+                };
+                if let layout::LayoutCommand::MoveWindowToWorkspace { workspace, follow, window_id } =
+                    &command
+                    && let Some(outcome) =
+                        self.move_window_to_affinity_display(workspace, *follow, *window_id)
+                {
+                    return outcome;
+                }
+                let command_space = match &command {
+                    layout::LayoutCommand::SwitchToWorkspace(workspace_index) => self
+                        .preferred_space_for_workspace(*workspace_index)
+                        .or_else(|| self.command_context_space()),
+                    _ => self.command_context_space(),
+                };
                 let (visible_spaces, visible_space_centers) = self.visible_spaces_for_layout(false);
                 return command_workflow::handle_command_layout(
                     &mut self.state,
@@ -3021,6 +3048,7 @@ impl Reactor {
             },
         ));
         self.apply_event_outcome(outcome);
+        self.reconcile_workspace_affinities(candidate_windows);
     }
 
     fn best_space_for_window(
@@ -3906,10 +3934,6 @@ impl Reactor {
                 }
             }
 
-            if windows_needing_layout_refresh.is_empty() {
-                continue;
-            }
-
             for (wid, effects) in windows_needing_layout_refresh {
                 let Some(window) = self.state.windows.window(wid) else {
                     continue;
@@ -3918,6 +3942,53 @@ impl Reactor {
                     info: window.layout_info(wid),
                     effects,
                 }));
+            }
+            self.reconcile_workspace_affinities(wids);
+        }
+    }
+
+    fn reconcile_workspace_affinities(&mut self, windows: impl IntoIterator<Item = WindowId>) {
+        if self.is_in_drag() {
+            return;
+        }
+        for window in windows {
+            if !self.state.windows.window(window).is_some_and(WindowState::is_admitted) {
+                continue;
+            }
+            let Some(assignment) = self
+                .layout_manager
+                .layout_engine
+                .virtual_workspace_manager()
+                .workspace_info_for_window_any(&self.state.windows, window)
+            else {
+                continue;
+            };
+            let Some(workspace_index) = self
+                .layout_manager
+                .layout_engine
+                .virtual_workspace_manager()
+                .workspace_index(assignment.space, assignment.workspace_id)
+            else {
+                continue;
+            };
+            let Some(target_screen) = self.preferred_screen_for_workspace(workspace_index).cloned()
+            else {
+                continue;
+            };
+            if target_screen.space == Some(assignment.space) {
+                continue;
+            }
+            match self.move_tracked_window_to_workspace_display(
+                window,
+                assignment.space,
+                target_screen,
+                workspace_index,
+                false,
+            ) {
+                Ok(outcome) => self.apply_event_outcome(outcome),
+                Err(error) => {
+                    warn!(?window, %error, "Failed to reconcile workspace display affinity")
+                }
             }
         }
     }
@@ -4944,6 +5015,173 @@ impl Reactor {
                 self.space_state.screens.iter().find(|screen| screen.display_uuid == *uuid)
             }
         }
+    }
+
+    fn preferred_screen_for_workspace(&self, workspace_index: usize) -> Option<&ScreenInfo> {
+        let target =
+            self.config.virtual_workspaces.display_target_for_workspace(workspace_index)?;
+        let ordered = self.screens_in_physical_order();
+        match target {
+            WorkspaceDisplayTarget::BuiltIn => ordered.into_iter().find(|screen| screen.is_builtin),
+            WorkspaceDisplayTarget::ExternalPrimary => {
+                ordered.into_iter().find(|screen| !screen.is_builtin)
+            }
+        }
+    }
+
+    fn preferred_space_for_workspace(&self, workspace_index: usize) -> Option<SpaceId> {
+        self.preferred_screen_for_workspace(workspace_index)
+            .and_then(|screen| screen.space)
+            .filter(|space| self.is_space_active(*space))
+    }
+
+    fn workspace_index_for_affinity_navigation(
+        &mut self,
+        direction: Direction,
+        skip_empty: Option<bool>,
+    ) -> Option<usize> {
+        if self.config.virtual_workspaces.workspace_display_rules.is_empty() {
+            return None;
+        }
+        let space = self.workspace_command_space()?;
+        let workspaces = self
+            .layout_manager
+            .layout_engine
+            .virtual_workspace_manager_mut()
+            .list_workspaces(space);
+        let current = self.layout_manager.layout_engine.active_workspace(space)?;
+        let current_index = workspaces.iter().position(|(workspace, _)| *workspace == current)?;
+        let mut candidate = current_index;
+
+        for _ in 1..workspaces.len() {
+            candidate = match direction {
+                Direction::Right if candidate + 1 < workspaces.len() => candidate + 1,
+                Direction::Left if candidate > 0 => candidate - 1,
+                Direction::Right if !self.config.virtual_workspaces.prevent_wrapping => 0,
+                Direction::Left if !self.config.virtual_workspaces.prevent_wrapping => {
+                    workspaces.len() - 1
+                }
+                _ => return Some(current_index),
+            };
+            let target_available_here =
+                self.config.virtual_workspaces.display_target_for_workspace(candidate).is_none()
+                    || self
+                        .preferred_screen_for_workspace(candidate)
+                        .is_none_or(|screen| screen.space == Some(space));
+            let satisfies_empty_policy = skip_empty != Some(true)
+                || !self
+                    .layout_manager
+                    .layout_engine
+                    .virtual_workspace_manager()
+                    .workspace_windows(&self.state.windows, space, workspaces[candidate].0)
+                    .is_empty();
+            if target_available_here && satisfies_empty_policy {
+                return Some(candidate);
+            }
+        }
+        Some(current_index)
+    }
+
+    fn move_window_to_affinity_display(
+        &mut self,
+        workspace: &rift_protocol::WorkspaceSelector,
+        follow: bool,
+        window_id: Option<u32>,
+    ) -> Option<anyhow::Result<EventOutcome>> {
+        let workspace_index = self.config.virtual_workspaces.workspace_index(workspace)?;
+        let target_screen = self.preferred_screen_for_workspace(workspace_index)?.clone();
+        let target_space = target_screen.space.filter(|space| self.is_space_active(*space))?;
+        let command_space = self.workspace_command_space();
+        let window = {
+            let workspaces = self.layout_manager.layout_engine.virtual_workspace_manager();
+            match window_id {
+                Some(index) => command_space
+                    .and_then(|space| {
+                        workspaces.find_window_by_idx(&self.state.windows, space, index)
+                    })
+                    .or_else(|| {
+                        self.iter_active_spaces().find_map(|space| {
+                            workspaces.find_window_by_idx(&self.state.windows, space, index)
+                        })
+                    }),
+                None => {
+                    self.main_window().or_else(|| self.window_id_under_cursor()).or_else(|| {
+                        command_space.and_then(|space| {
+                            workspaces.find_window_by_idx(&self.state.windows, space, 0)
+                        })
+                    })
+                }
+            }
+        }?;
+        let source_space = self
+            .assigned_space_for_window_id(window)
+            .or_else(|| self.best_space_for_window_id(window))
+            .filter(|space| self.is_space_active(*space))?;
+        if source_space == target_space {
+            return None;
+        }
+        if self.is_in_drag() {
+            warn!("Ignoring move-window-to-workspace across displays while a drag is active");
+            return Some(Ok(EventOutcome::no_change()));
+        }
+
+        Some(self.move_tracked_window_to_workspace_display(
+            window,
+            source_space,
+            target_screen,
+            workspace_index,
+            follow,
+        ))
+    }
+
+    fn move_tracked_window_to_workspace_display(
+        &mut self,
+        window: WindowId,
+        source_space: SpaceId,
+        target_screen: ScreenInfo,
+        target_workspace_index: usize,
+        follow: bool,
+    ) -> anyhow::Result<EventOutcome> {
+        let Some(target_space) = target_screen.space.filter(|space| self.is_space_active(*space))
+        else {
+            return Ok(EventOutcome::no_change());
+        };
+        let Some((window_server_id, mut target_frame)) = self
+            .state
+            .windows
+            .window(window)
+            .map(|window| (window.info.sys_id, window.frame_monotonic))
+        else {
+            return Ok(EventOutcome::no_change());
+        };
+        if follow {
+            self.store_current_floating_positions(target_space);
+            self.workspace_switch_manager
+                .start_workspace_switch(WorkspaceSwitchOrigin::Manual);
+        }
+        let mut origin = target_screen.frame.mid();
+        origin.x -= target_frame.size.width / 2.0;
+        origin.y -= target_frame.size.height / 2.0;
+        let min = target_screen.frame.min();
+        let max = target_screen.frame.max();
+        origin.x = origin.x.max(min.x).min(max.x - target_frame.size.width);
+        origin.y = origin.y.max(min.y).min(max.y - target_frame.size.height);
+        target_frame.origin = origin;
+
+        command_workflow::handle_command_reactor_move_window_to_workspace_display(
+            &mut self.state,
+            &mut self.layout_manager,
+            command_workflow::MoveWindowToWorkspaceDisplayPayload {
+                window,
+                window_server_id,
+                source_space,
+                target_space,
+                target_workspace_index,
+                target_screen: target_screen.frame,
+                target_frame,
+                follow,
+            },
+        )
     }
 
     fn screens_in_physical_order(&self) -> Vec<&ScreenInfo> {

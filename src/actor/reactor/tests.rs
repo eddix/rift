@@ -5,7 +5,10 @@ use super::testing::*;
 use super::*;
 use crate::actor::app::{AppThreadHandle, Request, pid_t};
 use crate::actor::wm_controller::WmEvent;
-use crate::common::config::{LayoutMode, OuterGaps, WorkspaceSelector};
+use crate::common::config::{
+    AppWorkspaceRule, LayoutMode, OuterGaps, WorkspaceDisplayRule, WorkspaceDisplayTarget,
+    WorkspaceSelector,
+};
 use crate::layout_engine::{Direction, LayoutCommand, LayoutEvent};
 use crate::model::window_store::NativeFullscreenTransition;
 use crate::sys::app::{AppInfo, WindowInfo};
@@ -474,6 +477,220 @@ fn workspace_commands_follow_active_display_space_across_active_displays() {
         reactor.layout_manager.layout_engine.active_workspace(right_space),
         Some(right_workspace),
         "workspace commands should not switch the focused window's display when it is not active"
+    );
+}
+
+#[test]
+fn direct_workspace_switch_uses_configured_display_affinity() {
+    let mut reactor = test_reactor();
+    reactor.config.virtual_workspaces.workspace_display_rules = vec![WorkspaceDisplayRule {
+        workspace: WorkspaceSelector::Index(1),
+        display: WorkspaceDisplayTarget::ExternalPrimary,
+    }];
+    let builtin = CGRect::new(CGPoint::new(0., 0.), CGSize::new(1440., 900.));
+    let external = CGRect::new(CGPoint::new(1440., 0.), CGSize::new(2560., 1440.));
+    let builtin_space = SpaceId::new(1);
+    let external_space = SpaceId::new(2);
+    reactor.handle_event(space_state_event(vec![builtin, external], vec![
+        Some(builtin_space),
+        Some(external_space),
+    ]));
+
+    let builtin_active = reactor.layout_manager.layout_engine.active_workspace(builtin_space);
+    let external_target = reactor.test_workspace(external_space, 1);
+    reactor.handle_test_layout_command(LayoutCommand::SwitchToWorkspace(1));
+
+    assert_eq!(
+        (
+            reactor.layout_manager.layout_engine.active_workspace(builtin_space),
+            reactor.layout_manager.layout_engine.active_workspace(external_space),
+        ),
+        (builtin_active, Some(external_target))
+    );
+}
+
+#[test]
+fn move_window_to_workspace_crosses_to_its_affinity_display() {
+    let (mut apps, mut reactor) = test_context();
+    reactor.config.virtual_workspaces.workspace_display_rules = vec![WorkspaceDisplayRule {
+        workspace: WorkspaceSelector::Index(1),
+        display: WorkspaceDisplayTarget::ExternalPrimary,
+    }];
+    let builtin = CGRect::new(CGPoint::new(0., 0.), CGSize::new(1000., 1000.));
+    let external = CGRect::new(CGPoint::new(1000., 0.), CGSize::new(1000., 1000.));
+    let builtin_space = SpaceId::new(1);
+    let external_space = SpaceId::new(2);
+    reactor.handle_event(space_state_event(vec![builtin, external], vec![
+        Some(builtin_space),
+        Some(external_space),
+    ]));
+    apps.make_app_and_settle(&mut reactor, 1, make_windows(1));
+    let window = WindowId::new(1, 1);
+    let target_workspace = reactor.test_workspace(external_space, 1);
+
+    reactor.handle_test_layout_command(LayoutCommand::MoveWindowToWorkspace {
+        workspace: WorkspaceSelector::Index(1),
+        follow: true,
+        window_id: Some(window.idx.get()),
+    });
+    apps.simulate_until_quiet(&mut reactor);
+
+    assert_eq!(
+        (
+            reactor.assigned_space_for_window_id(window),
+            reactor
+                .layout_manager
+                .layout_engine
+                .virtual_workspace_manager()
+                .workspace_for_window(&reactor.state.windows, external_space, window),
+            reactor.layout_manager.layout_engine.active_workspace(external_space),
+        ),
+        (
+            Some(external_space),
+            Some(target_workspace),
+            Some(target_workspace)
+        )
+    );
+}
+
+#[test]
+fn app_rule_places_window_on_workspace_affinity_display_without_switching_workspace() {
+    let mut settings = crate::common::config::VirtualWorkspaceSettings::default();
+    settings.app_rules = vec![AppWorkspaceRule {
+        app_id: Some("com.testapp1".to_string()),
+        workspace: Some(WorkspaceSelector::Index(1)),
+        ..Default::default()
+    }];
+    settings.workspace_display_rules = vec![WorkspaceDisplayRule {
+        workspace: WorkspaceSelector::Index(1),
+        display: WorkspaceDisplayTarget::ExternalPrimary,
+    }];
+    let mut apps = Apps::new();
+    let mut reactor = test_reactor_with_workspace_settings(&settings);
+    reactor.config.virtual_workspaces = settings;
+    let builtin = CGRect::new(CGPoint::new(0., 0.), CGSize::new(1000., 1000.));
+    let external = CGRect::new(CGPoint::new(1000., 0.), CGSize::new(1000., 1000.));
+    let builtin_space = SpaceId::new(1);
+    let external_space = SpaceId::new(2);
+    reactor.handle_event(space_state_event(vec![builtin, external], vec![
+        Some(builtin_space),
+        Some(external_space),
+    ]));
+    let external_active_before =
+        reactor.layout_manager.layout_engine.active_workspace(external_space);
+    let target_workspace = reactor.test_workspace(external_space, 1);
+
+    apps.make_app_and_settle(&mut reactor, 1, make_windows(1));
+    let window = WindowId::new(1, 1);
+
+    assert_eq!(
+        (
+            reactor.assigned_space_for_window_id(window),
+            reactor.test_workspace_for_window(external_space, window),
+            reactor.layout_manager.layout_engine.active_workspace(external_space),
+        ),
+        (
+            Some(external_space),
+            Some(target_workspace),
+            external_active_before
+        )
+    );
+}
+
+#[test]
+fn reconnecting_affinity_display_moves_existing_managed_window_back() {
+    let mut settings = crate::common::config::VirtualWorkspaceSettings::default();
+    settings.app_rules = vec![AppWorkspaceRule {
+        app_id: Some("com.testapp1".to_string()),
+        workspace: Some(WorkspaceSelector::Index(1)),
+        ..Default::default()
+    }];
+    settings.workspace_display_rules = vec![WorkspaceDisplayRule {
+        workspace: WorkspaceSelector::Index(1),
+        display: WorkspaceDisplayTarget::ExternalPrimary,
+    }];
+    let mut apps = Apps::new();
+    let mut reactor = test_reactor_with_workspace_settings(&settings);
+    reactor.config.virtual_workspaces = settings;
+    let builtin = CGRect::new(CGPoint::new(0., 0.), CGSize::new(1000., 1000.));
+    let external = CGRect::new(CGPoint::new(1000., 0.), CGSize::new(1000., 1000.));
+    let builtin_space = SpaceId::new(1);
+    let external_space = SpaceId::new(2);
+    reactor.handle_event(space_state_event(vec![builtin], vec![Some(builtin_space)]));
+    apps.make_app_and_settle(&mut reactor, 1, make_windows(1));
+    let window = WindowId::new(1, 1);
+    assert_eq!(reactor.assigned_space_for_window_id(window), Some(builtin_space));
+
+    reactor.handle_event(space_state_event_with(
+        vec![builtin, external],
+        vec![Some(builtin_space), Some(external_space)],
+        |state| {
+            state.display_set_changed = true;
+            state.topology_changed = true;
+            state.should_force_refresh_layout = true;
+        },
+    ));
+    apps.simulate_until_quiet(&mut reactor);
+
+    assert_eq!(
+        reactor.assigned_space_for_window_id(window),
+        Some(external_space)
+    );
+}
+
+#[test]
+fn next_workspace_skips_workspaces_affined_to_other_displays() {
+    let mut reactor = test_reactor();
+    reactor.config.virtual_workspaces.workspace_display_rules = vec![
+        WorkspaceDisplayRule {
+            workspace: WorkspaceSelector::Index(0),
+            display: WorkspaceDisplayTarget::BuiltIn,
+        },
+        WorkspaceDisplayRule {
+            workspace: WorkspaceSelector::Index(1),
+            display: WorkspaceDisplayTarget::ExternalPrimary,
+        },
+        WorkspaceDisplayRule {
+            workspace: WorkspaceSelector::Index(2),
+            display: WorkspaceDisplayTarget::ExternalPrimary,
+        },
+        WorkspaceDisplayRule {
+            workspace: WorkspaceSelector::Index(3),
+            display: WorkspaceDisplayTarget::ExternalPrimary,
+        },
+    ];
+    let builtin = CGRect::new(CGPoint::new(0., 0.), CGSize::new(1000., 1000.));
+    let external = CGRect::new(CGPoint::new(1000., 0.), CGSize::new(1000., 1000.));
+    let builtin_space = SpaceId::new(1);
+    let external_space = SpaceId::new(2);
+    reactor.handle_event(space_state_event(vec![builtin, external], vec![
+        Some(builtin_space),
+        Some(external_space),
+    ]));
+    let builtin_workspace = reactor.test_workspace(builtin_space, 0);
+    let external_workspace_one = reactor.test_workspace(external_space, 1);
+    let external_workspace_two = reactor.test_workspace(external_space, 2);
+
+    reactor.handle_test_layout_command(LayoutCommand::NextWorkspace(None));
+    assert_eq!(
+        reactor.layout_manager.layout_engine.active_workspace(builtin_space),
+        Some(builtin_workspace)
+    );
+
+    assert!(reactor.set_test_active_workspace(external_space, external_workspace_one));
+    reactor.handle_event(space_state_event_with(
+        vec![builtin, external],
+        vec![Some(builtin_space), Some(external_space)],
+        |state| {
+            state.command_space = Some(external_space);
+            state.menu_bar_space = Some(external_space);
+        },
+    ));
+    reactor.handle_test_layout_command(LayoutCommand::NextWorkspace(None));
+
+    assert_eq!(
+        reactor.layout_manager.layout_engine.active_workspace(external_space),
+        Some(external_workspace_two)
     );
 }
 
@@ -3881,6 +4098,7 @@ fn fullscreen_space_in_screen_params_does_not_trigger_topology_relayout() {
             space: Some(space),
             display_uuid: display_uuid.clone(),
             name: None,
+            is_builtin: true,
         }]
     };
 
@@ -4002,6 +4220,7 @@ fn fullscreen_screen_params_preserves_window_layout() {
         space: None,
         display_uuid: "test-display-0".to_string(),
         name: None,
+        is_builtin: true,
     }]));
     apps.simulate_until_quiet(&mut reactor);
 

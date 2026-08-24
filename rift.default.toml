@@ -279,6 +279,16 @@ reapply_app_rules_on_title_change = false
 # ]
 workspace_rules = []
 
+# Optional workspace-to-display affinity. Direct workspace switches, app rules,
+# and move-to-workspace commands use the preferred display when it is connected.
+# If it is unavailable, the workspace falls back to the current display.
+# Supported display targets: "built_in" and "external_primary".
+# workspace_display_rules = [
+#   { workspace = "first", display = "built_in" },
+#   { workspace = "second", display = "external_primary" },
+# ]
+workspace_display_rules = []
+
 
 # Default workspace to activate on startup (0-based index).
 # If omitted, defaults to 0 (first workspace). Must be less than default_workspace_count.

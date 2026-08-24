@@ -50,6 +50,11 @@ pub struct VirtualWorkspaceSettings {
     pub app_rules: Vec<AppWorkspaceRule>,
     #[serde(default)]
     pub workspace_rules: Vec<WorkspaceLayoutRule>,
+    /// Preferred display for each logical workspace. The preference is applied
+    /// whenever the target display is connected and falls back to the command
+    /// display when it is unavailable.
+    #[serde(default)]
+    pub workspace_display_rules: Vec<WorkspaceDisplayRule>,
 }
 
 #[derive(Serialize, Deserialize, Debug, PartialEq, Clone)]
@@ -59,6 +64,22 @@ pub struct WorkspaceLayoutRule {
     pub workspace: WorkspaceSelector,
     /// Layout mode to use for this workspace
     pub layout: LayoutMode,
+}
+
+#[derive(Serialize, Deserialize, Debug, PartialEq, Eq, Clone, Copy)]
+#[serde(rename_all = "snake_case")]
+pub enum WorkspaceDisplayTarget {
+    BuiltIn,
+    ExternalPrimary,
+}
+
+#[derive(Serialize, Deserialize, Debug, PartialEq, Clone)]
+#[serde(deny_unknown_fields)]
+pub struct WorkspaceDisplayRule {
+    /// Target workspace by index or name.
+    pub workspace: WorkspaceSelector,
+    /// Preferred connected display for this workspace.
+    pub display: WorkspaceDisplayTarget,
 }
 
 // Allow specifying a workspace by numeric index or by name in the config.
@@ -143,6 +164,7 @@ impl Default for VirtualWorkspaceSettings {
             reapply_app_rules_on_title_change: false,
             app_rules: Vec::new(),
             workspace_rules: Vec::new(),
+            workspace_display_rules: Vec::new(),
         }
     }
 }
@@ -170,6 +192,15 @@ impl VirtualWorkspaceSettings {
                 "default_workspace ({}) must be less than default_workspace_count ({})",
                 self.default_workspace, self.default_workspace_count
             ));
+        }
+
+        for (index, rule) in self.workspace_display_rules.iter().enumerate() {
+            if self.workspace_index(&rule.workspace).is_none() {
+                issues.push(format!(
+                    "Workspace display rule {} references unknown workspace {:?}",
+                    index, rule.workspace
+                ));
+            }
         }
 
         // Validate rules and check duplicates in a single pass
@@ -339,6 +370,37 @@ impl VirtualWorkspaceSettings {
         }
 
         issues
+    }
+
+    pub fn workspace_index(&self, selector: &WorkspaceSelector) -> Option<usize> {
+        match selector {
+            WorkspaceSelector::Index(index) => {
+                (*index < self.default_workspace_count).then_some(*index)
+            }
+            WorkspaceSelector::Name(name) => (0..self.default_workspace_count)
+                .find(|index| self.workspace_name_matches(*index, name)),
+        }
+    }
+
+    pub fn display_target_for_workspace(
+        &self,
+        workspace_index: usize,
+    ) -> Option<WorkspaceDisplayTarget> {
+        self.workspace_display_rules.iter().rev().find_map(|rule| {
+            let matches = match &rule.workspace {
+                WorkspaceSelector::Index(index) => *index == workspace_index,
+                WorkspaceSelector::Name(name) => self.workspace_name_matches(workspace_index, name),
+            };
+            matches.then_some(rule.display)
+        })
+    }
+
+    fn workspace_name_matches(&self, workspace_index: usize, name: &str) -> bool {
+        self.workspace_names
+            .get(workspace_index)
+            .is_some_and(|candidate| candidate == name)
+            || (workspace_index >= self.workspace_names.len()
+                && name == format!("Workspace {}", workspace_index + 1))
     }
 }
 
@@ -1939,6 +2001,37 @@ mod tests {
 
         assert_eq!(round_tripped.key_specs.len(), round_tripped.keys.len());
         assert!(!round_tripped.key_specs.is_empty());
+    }
+
+    #[test]
+    fn workspace_display_rules_resolve_names_and_last_match_wins() {
+        let mut settings = VirtualWorkspaceSettings::default();
+        settings.workspace_display_rules = vec![
+            WorkspaceDisplayRule {
+                workspace: WorkspaceSelector::Index(1),
+                display: WorkspaceDisplayTarget::BuiltIn,
+            },
+            WorkspaceDisplayRule {
+                workspace: WorkspaceSelector::Name("Development".to_string()),
+                display: WorkspaceDisplayTarget::ExternalPrimary,
+            },
+        ];
+
+        assert_eq!(
+            settings.display_target_for_workspace(1),
+            Some(WorkspaceDisplayTarget::ExternalPrimary)
+        );
+    }
+
+    #[test]
+    fn workspace_display_rule_rejects_unknown_workspace_name() {
+        let mut settings = VirtualWorkspaceSettings::default();
+        settings.workspace_display_rules = vec![WorkspaceDisplayRule {
+            workspace: WorkspaceSelector::Name("Missing".to_string()),
+            display: WorkspaceDisplayTarget::BuiltIn,
+        }];
+
+        assert!(settings.validate().iter().any(|issue| issue.contains("unknown workspace")));
     }
 
     #[test]

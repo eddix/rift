@@ -409,6 +409,18 @@ pub struct MoveWindowToDisplayPayload {
     pub target_frame: objc2_core_foundation::CGRect,
 }
 
+#[derive(Debug, Clone, Copy)]
+pub struct MoveWindowToWorkspaceDisplayPayload {
+    pub window: WindowId,
+    pub window_server_id: Option<WindowServerId>,
+    pub source_space: SpaceId,
+    pub target_space: SpaceId,
+    pub target_workspace_index: usize,
+    pub target_screen: objc2_core_foundation::CGRect,
+    pub target_frame: objc2_core_foundation::CGRect,
+    pub follow: bool,
+}
+
 pub fn handle_command_reactor_move_window_to_display(
     state: &mut RiftState,
     layout: &mut LayoutManager,
@@ -443,5 +455,46 @@ pub fn handle_command_reactor_move_window_to_display(
 
     Ok(EventOutcome::layout_changed(false)
         .with_layout_response(response, None)
+        .with_pre_layout_window_frame_write(payload.window, payload.target_frame, true))
+}
+
+pub fn handle_command_reactor_move_window_to_workspace_display(
+    state: &mut RiftState,
+    layout: &mut LayoutManager,
+    payload: MoveWindowToWorkspaceDisplayPayload,
+) -> anyhow::Result<EventOutcome> {
+    if let Some(window) = state.windows.window_mut(payload.window) {
+        window.frame_monotonic = payload.target_frame;
+    } else {
+        warn!(window = ?payload.window, "Move window to workspace display ignored: unknown window");
+        return Ok(EventOutcome::no_change());
+    }
+
+    let response = layout.layout_engine.move_window_to_workspace_index_on_space(
+        &mut state.windows,
+        crate::layout_engine::WorkspaceDisplayMove {
+            source_space: payload.source_space,
+            target_space: payload.target_space,
+            target_screen_size: payload.target_screen.size,
+            window: payload.window,
+            target_workspace_index: payload.target_workspace_index,
+            focus_target: payload.follow,
+        },
+    );
+
+    if state
+        .windows
+        .workspace_for_window(payload.target_space, payload.window)
+        .is_some()
+        && let Some(window_server_id) = payload.window_server_id
+    {
+        state
+            .windows
+            .set_window_server_space(window_server_id, Some(payload.target_space));
+        state.windows.mark_window_visible(window_server_id);
+    }
+
+    Ok(EventOutcome::layout_changed(false)
+        .with_layout_response(response, payload.follow.then_some(payload.target_space))
         .with_pre_layout_window_frame_write(payload.window, payload.target_frame, true))
 }
