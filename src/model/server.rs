@@ -262,6 +262,7 @@ impl<'de> Deserialize<'de> for RuntimeDisplayData {
             display_uuid: helper.uuid,
             name: helper.name,
             space: helper.space.map(SpaceId::new),
+            is_builtin: false,
         };
 
         Ok(RuntimeDisplayData {
@@ -334,6 +335,7 @@ mod tests {
             display_uuid: "display-uuid".to_string(),
             name: Some("Primary".to_string()),
             space: Some(SpaceId::new(42)),
+            is_builtin: true,
         };
         let data = RuntimeDisplayData {
             info,

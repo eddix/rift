@@ -16,11 +16,12 @@ use tracing::{debug, warn};
 
 use super::skylight::{
     CFRelease, CFUUIDCreateFromString, CFUUIDCreateString, CGDisplayCreateUUIDFromDisplayID,
-    CGDisplayGetDisplayIDFromUUID, CGSCopyBestManagedDisplayForRect, CGSCopyManagedDisplaySpaces,
-    CGSCopyManagedDisplays, CGSCopySpaces, CGSGetActiveSpace, CGSManagedDisplayGetCurrentSpace,
-    CGSSpaceMask, CoreDockGetAutoHideEnabled, CoreDockGetOrientationAndPinning, G_CONNECTION,
-    SLSCopyActiveMenuBarDisplayIdentifier, SLSGetDisplayMenubarHeight, SLSGetDockRectWithReason,
-    SLSGetMenuBarAutohideEnabled, SLSGetSpaceManagementMode, SLSMainConnectionID,
+    CGDisplayGetDisplayIDFromUUID, CGDisplayIsBuiltin, CGSCopyBestManagedDisplayForRect,
+    CGSCopyManagedDisplaySpaces, CGSCopyManagedDisplays, CGSCopySpaces, CGSGetActiveSpace,
+    CGSManagedDisplayGetCurrentSpace, CGSSpaceMask, CoreDockGetAutoHideEnabled,
+    CoreDockGetOrientationAndPinning, G_CONNECTION, SLSCopyActiveMenuBarDisplayIdentifier,
+    SLSGetDisplayMenubarHeight, SLSGetDockRectWithReason, SLSGetMenuBarAutohideEnabled,
+    SLSGetSpaceManagementMode, SLSMainConnectionID,
 };
 use crate::common::collections::HashMap;
 use crate::sys::geometry::CGRectDef;
@@ -68,6 +69,8 @@ pub struct ScreenInfo {
     pub display_uuid: String,
     pub name: Option<String>,
     pub space: Option<SpaceId>,
+    #[serde(default)]
+    pub is_builtin: bool,
 }
 
 fn unit_scale() -> f64 { 1.0 }
@@ -220,6 +223,7 @@ impl<S: System> ScreenCache<S> {
                     display_uuid,
                     name: ns_screens.iter().find(|s| s.cg_id == cg_id).and_then(|s| s.name.clone()),
                     space: None,
+                    is_builtin: unsafe { CGDisplayIsBuiltin(cg_id.as_u32()) },
                 }
             })
             .collect();
@@ -531,7 +535,7 @@ impl System for Actual {
 
     fn notch_height(&self, did: u32) -> f64 {
         let screens = NSScreen::screens(self.mtm);
-        let builtin = unsafe { super::skylight::CGDisplayIsBuiltin(did) };
+        let builtin = unsafe { CGDisplayIsBuiltin(did) };
         if !builtin {
             return 0.0;
         }
