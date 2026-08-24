@@ -1977,6 +1977,12 @@ impl Reactor {
                         .unwrap_or(layout::LayoutCommand::PrevWorkspace(skip_empty)),
                     command => command,
                 };
+                if let layout::LayoutCommand::SwitchToWorkspace(workspace_index) = &command
+                    && let Some(outcome) =
+                        self.refocus_active_workspace_on_affinity_display(*workspace_index)
+                {
+                    return Ok(outcome);
+                }
                 if let layout::LayoutCommand::MoveWindowToWorkspace { workspace, follow, window_id } =
                     &command
                     && let Some(outcome) =
@@ -5033,6 +5039,41 @@ impl Reactor {
         self.preferred_screen_for_workspace(workspace_index)
             .and_then(|screen| screen.space)
             .filter(|space| self.is_space_active(*space))
+    }
+
+    fn refocus_active_workspace_on_affinity_display(
+        &self,
+        workspace_index: usize,
+    ) -> Option<EventOutcome> {
+        let source_space = self.command_context_space()?;
+        let target_screen = self.preferred_screen_for_workspace(workspace_index)?;
+        let target_space = target_screen.space.filter(|space| self.is_space_active(*space))?;
+        if source_space == target_space
+            || self.layout_manager.layout_engine.active_workspace_idx(target_space)
+                != Some(workspace_index as u64)
+        {
+            return None;
+        }
+
+        let focus_window = self.last_focused_window_in_space(target_space).or_else(|| {
+            self.layout_manager
+                .layout_engine
+                .windows_in_active_workspace(&self.state.windows, target_space)
+                .into_iter()
+                .next()
+        });
+        let Some(focus_window) = focus_window else {
+            return Some(EventOutcome::no_change().with_mouse_warp(target_screen.frame.mid()));
+        };
+        Some(EventOutcome::no_change().with_layout_response(
+            layout::EventResponse {
+                changed: false,
+                raise_windows: Vec::new(),
+                focus_window: Some(focus_window),
+                boundary_hit: None,
+            },
+            Some(target_space),
+        ))
     }
 
     fn workspace_index_for_affinity_navigation(

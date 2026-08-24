@@ -510,6 +510,69 @@ fn direct_workspace_switch_uses_configured_display_affinity() {
 }
 
 #[test]
+fn direct_workspace_switch_refocuses_active_workspace_on_other_display() {
+    let mut reactor = test_reactor();
+    let (raise_manager_tx, mut raise_manager_rx) = actor::channel();
+    reactor.communication_manager.raise_manager_tx = raise_manager_tx;
+    reactor.config.virtual_workspaces.workspace_display_rules = vec![WorkspaceDisplayRule {
+        workspace: WorkspaceSelector::Index(0),
+        display: WorkspaceDisplayTarget::BuiltIn,
+    }];
+    let builtin = CGRect::new(CGPoint::new(0., 0.), CGSize::new(1000., 1000.));
+    let external = CGRect::new(CGPoint::new(1000., 0.), CGSize::new(1000., 1000.));
+    let builtin_space = SpaceId::new(1);
+    let external_space = SpaceId::new(2);
+    reactor.handle_event(space_state_event_with(
+        vec![builtin, external],
+        vec![Some(builtin_space), Some(external_space)],
+        |state| {
+            state.command_space = Some(external_space);
+            state.menu_bar_space = Some(external_space);
+        },
+    ));
+    reactor.add_test_app(1);
+    reactor.add_test_app(2);
+    let chat = WindowId::new(1, 1);
+    let terminal = WindowId::new(2, 1);
+    let chat_workspace = reactor.test_workspace(builtin_space, 0);
+    let terminal_workspace = reactor.test_workspace(external_space, 2);
+    assert!(reactor.set_test_active_workspace(external_space, terminal_workspace));
+    reactor.add_test_window(chat, WindowServerId::new(900_001), Some(builtin_space), builtin);
+    reactor.add_test_window(
+        terminal,
+        WindowServerId::new(900_002),
+        Some(external_space),
+        external,
+    );
+    reactor.mark_test_window_visible_in_space(WindowServerId::new(900_001), builtin_space);
+    reactor.mark_test_window_visible_in_space(WindowServerId::new(900_002), external_space);
+    assert!(reactor.assign_test_window_to_workspace(builtin_space, chat, chat_workspace));
+    assert!(reactor.assign_test_window_to_workspace(external_space, terminal, terminal_workspace));
+    reactor.send_layout_event(LayoutEvent::WindowAdded(builtin_space, chat));
+    reactor.send_layout_event(LayoutEvent::WindowAdded(external_space, terminal));
+    reactor.send_layout_event(LayoutEvent::WindowFocused(builtin_space, chat));
+    reactor.send_layout_event(LayoutEvent::WindowFocused(external_space, terminal));
+    while raise_manager_rx.try_recv().is_ok() {}
+
+    reactor.handle_test_layout_command(LayoutCommand::SwitchToWorkspace(0));
+    let focused = match raise_manager_rx.try_recv().expect("expected a focus request").1 {
+        raise_manager::Event::RaiseRequest(RaiseRequest { focus_window, .. }) => {
+            focus_window.map(|(window, _)| window)
+        }
+        event => panic!("expected a raise request, got {event:?}"),
+    };
+
+    assert_eq!(
+        (
+            focused,
+            reactor.layout_manager.layout_engine.active_workspace(builtin_space),
+            reactor.layout_manager.layout_engine.active_workspace(external_space),
+        ),
+        (Some(chat), Some(chat_workspace), Some(terminal_workspace))
+    );
+}
+
+#[test]
 fn move_window_to_workspace_crosses_to_its_affinity_display() {
     let (mut apps, mut reactor) = test_context();
     reactor.config.virtual_workspaces.workspace_display_rules = vec![WorkspaceDisplayRule {
