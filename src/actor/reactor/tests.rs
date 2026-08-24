@@ -526,8 +526,8 @@ fn direct_workspace_switch_refocuses_active_workspace_on_other_display() {
         vec![builtin, external],
         vec![Some(builtin_space), Some(external_space)],
         |state| {
-            state.command_space = Some(external_space);
-            state.menu_bar_space = Some(external_space);
+            state.command_space = Some(builtin_space);
+            state.menu_bar_space = Some(builtin_space);
         },
     ));
     reactor.add_test_app(1);

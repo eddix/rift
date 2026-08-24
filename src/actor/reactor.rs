@@ -4910,18 +4910,20 @@ impl Reactor {
         self.active_display_space().filter(|space| self.is_space_active(*space))
     }
 
+    fn focused_window_space(&self) -> Option<SpaceId> {
+        self.layout_manager
+            .layout_engine
+            .focused_window()
+            .and_then(|window| {
+                self.assigned_space_for_window_id(window)
+                    .or_else(|| self.best_space_for_window_id(window))
+            })
+            .filter(|space| self.is_space_active(*space))
+            .or_else(|| self.main_window_space().filter(|space| self.is_space_active(*space)))
+    }
+
     fn command_context_space(&self) -> Option<SpaceId> {
-        self.workspace_command_space().or_else(|| {
-            self.layout_manager
-                .layout_engine
-                .focused_window()
-                .and_then(|wid| {
-                    self.assigned_space_for_window_id(wid)
-                        .or_else(|| self.best_space_for_window_id(wid))
-                })
-                .filter(|space| self.is_space_active(*space))
-                .or_else(|| self.main_window_space().filter(|space| self.is_space_active(*space)))
-        })
+        self.workspace_command_space().or_else(|| self.focused_window_space())
     }
 
     fn screen_for_point(&self, point: CGPoint) -> Option<&ScreenInfo> {
@@ -5045,7 +5047,7 @@ impl Reactor {
         &self,
         workspace_index: usize,
     ) -> Option<EventOutcome> {
-        let source_space = self.command_context_space()?;
+        let source_space = self.focused_window_space().or_else(|| self.command_context_space())?;
         let target_screen = self.preferred_screen_for_workspace(workspace_index)?;
         let target_space = target_screen.space.filter(|space| self.is_space_active(*space))?;
         if source_space == target_space
