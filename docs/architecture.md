@@ -30,20 +30,20 @@ by the shared snapshot stream. The border derives focused-window identity,
 visibility, geometry, and Mission Control suppression from the same committed
 state, and does not maintain a second AX or SkyLight observation model.
 
-The border keeps the CGS backing resolution at 1x because the shared WindowServer
-context renderer clears in logical-point coordinates. HiDPI changes only the
-`CALayer` contents scale; changing the CGS backing scale without also changing
-the CGContext clear/render transform can leave uninitialized opaque pixels over
-the target window.
+The border uses one transparent buffered WindowServer window and a persistent
+CGContext on a dedicated SkyLight connection. Creation and synchronization
+follow the same lifecycle as JankyBorders: the window carries the floating and
+ignore-for-events tags, lives on the target space, and moves, inherits the
+target level/sublevel, and orders above the target in one WindowServer
+transaction. Rift queries the resulting tags before making the surface visible;
+an overlay that is still eligible for pointer events fails closed.
 
-The border uses one transparent buffered WindowServer window with a persistent
-CGContext. Origin-only movement uses `SLSMoveWindow` and never reshapes the
-backing store. A size or style change first hides the overlay, then reshapes and
-redraws it before restoring alpha. This ordering prevents an uninitialized
-backing surface from being presented over the target window while preserving a
-continuous rounded border. The overlay is explicitly excluded from pointer-event
-delivery, in addition to carrying WindowServer's ignore-for-events tag, so its
-full rectangular surface cannot intercept scrolling or clicks.
+A size or style change disables connection updates, freezes the surface,
+reshapes and redraws it, thaws it, and only then restores visibility. Activating
+click and ordering-group notifications bypass snapshot deduplication and ask the
+border actor to repeat the relative-order transaction without mutating desktop
+domain state. This keeps presentation-only z-order invalidation separate from
+the committed desktop snapshot.
 
 The remaining migration is deliberately incremental:
 

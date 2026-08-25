@@ -2,18 +2,24 @@ use std::fmt;
 use std::ptr::{self, NonNull};
 
 use objc2_core_foundation::{
-    CFArray, CFNumber, CFRetained, CFString, CFType, CGPoint, CGRect, CGSize, Type,
+    CFArray, CFNumber, CFRetained, CFString, CFType, CGAffineTransform, CGPoint, CGRect, CGSize,
+    Type,
 };
 use objc2_core_graphics::{CGContext, CGError};
 
 use super::skylight::{
     CFRelease, CGRegionCreateEmptyRegion, CGSNewRegionWithRect, CGSNewRegionWithRectList,
-    G_CONNECTION, SLSClearWindowTags, SLSFlushWindowContentRegion, SLSMoveWindow,
-    SLSMoveWindowsToManagedSpace, SLSNewWindow, SLSNewWindowWithOpaqueShapeAndContext,
-    SLSOrderWindow, SLSReleaseWindow, SLSSetMouseEventEnableFlags, SLSSetWindowAlpha,
+    G_CONNECTION, SLSClearWindowTags, SLSDisableUpdate, SLSFlushWindowContentRegion,
+    SLSMoveWindow, SLSMoveWindowsToManagedSpace, SLSNewConnection, SLSNewWindow,
+    SLSNewWindowWithOpaqueShapeAndContext, SLSOrderWindow, SLSReenableUpdate,
+    SLSReleaseConnection, SLSReleaseWindow, SLSSetWindowAlpha,
     SLSSetWindowBackgroundBlurRadiusStyle, SLSSetWindowLevel, SLSSetWindowOpacity,
-    SLSSetWindowProperty, SLSSetWindowResolution, SLSSetWindowShape, SLSSetWindowSubLevel,
-    SLSSetWindowTags, SLWindowContextCreate, cid_t,
+    SLSSetWindowProperty, SLSSetWindowResolution, SLSSetWindowShadowParameters,
+    SLSSetWindowShape, SLSSetWindowSubLevel, SLSSetWindowTags, SLSTransactionCommit,
+    SLSTransactionCreate, SLSTransactionMoveWindowWithGroup, SLSTransactionOrderWindow,
+    SLSTransactionSetWindowLevel, SLSTransactionSetWindowSubLevel,
+    SLSTransactionSetWindowTransform, SLSWindowFreezeWithOptions, SLSWindowThaw,
+    SLWindowContextCreate, cid_t,
 };
 use crate::sys::cg_ok;
 use crate::sys::skylight::SLSSetWindowBackgroundBlurRadius;
@@ -104,6 +110,8 @@ pub enum CgsWindowError {
     Context(CGError),
     Flush(CGError),
     Events(CGError),
+    Connection(CGError),
+    Transaction(CGError),
 }
 
 impl fmt::Display for CgsWindowError {
@@ -124,6 +132,8 @@ impl fmt::Display for CgsWindowError {
             Context(e) => write!(f, "CGS window context error: {:?}", e),
             Flush(e) => write!(f, "CGS window flush error: {:?}", e),
             Events(e) => write!(f, "CGS window event-routing error: {:?}", e),
+            Connection(e) => write!(f, "CGS connection error: {:?}", e),
+            Transaction(e) => write!(f, "CGS window transaction error: {:?}", e),
         }
     }
 }
@@ -135,6 +145,7 @@ pub struct CgsWindow {
     id: WindowId,
     connection: cid_t,
     owned: bool,
+    owns_connection: bool,
 }
 
 impl CgsWindow {
@@ -170,6 +181,7 @@ impl CgsWindow {
                 id: wid,
                 connection,
                 owned: true,
+                owns_connection: false,
             })
         }
     }
@@ -203,6 +215,7 @@ impl CgsWindow {
                 id: wid,
                 connection,
                 owned: true,
+                owns_connection: false,
             };
             window.set_resolution(2.0)?;
             window.set_opacity(false)?;
@@ -211,28 +224,40 @@ impl CgsWindow {
         }
     }
 
-    /// Create a buffered overlay window without an opaque backing shape.
+    /// Create a buffered overlay on its own WindowServer connection.
+    ///
+    /// Keeping presentation windows off the application's main connection
+    /// matches JankyBorders and prevents them from participating in Rift's
+    /// own AppKit event/activation routing.
     pub fn new_overlay(frame: CGRect) -> Result<Self, CgsWindowError> {
         unsafe {
-            let connection = *G_CONNECTION;
+            let mut connection = 0;
+            cg_ok(SLSNewConnection(0, &mut connection)).map_err(CgsWindowError::Connection)?;
             let local_frame = CGRect::new(CGPoint::ZERO, frame.size);
-            let region = CFRegion::from_rect(&local_frame).map_err(CgsWindowError::Region)?;
+            let region = match CFRegion::from_rect(&local_frame) {
+                Ok(region) => region,
+                Err(error) => {
+                    let _ = cg_ok(SLSReleaseConnection(connection));
+                    return Err(CgsWindowError::Region(error));
+                }
+            };
             let mut wid = 0;
-            cg_ok(SLSNewWindow(
+            if let Err(error) = cg_ok(SLSNewWindow(
                 connection,
                 2,
-                frame.origin.x as f32,
-                frame.origin.y as f32,
+                -9999.0,
+                -9999.0,
                 region.as_ptr(),
                 &mut wid,
-            ))
-            .map_err(CgsWindowError::Window)?;
-            cg_ok(SLSSetWindowResolution(connection, wid, 1.0))
-                .map_err(CgsWindowError::Resolution)?;
+            )) {
+                let _ = cg_ok(SLSReleaseConnection(connection));
+                return Err(CgsWindowError::Window(error));
+            }
             Ok(Self {
                 id: wid,
                 connection,
                 owned: true,
+                owns_connection: true,
             })
         }
     }
@@ -252,6 +277,7 @@ impl CgsWindow {
             id,
             connection: *G_CONNECTION,
             owned: false,
+            owns_connection: false,
         }
     }
 
@@ -268,12 +294,6 @@ impl CgsWindow {
     }
 
     #[inline]
-    pub fn set_mouse_events_enabled(&self, enabled: bool) -> Result<(), CgsWindowError> {
-        unsafe { cg_ok(SLSSetMouseEventEnableFlags(self.connection, self.id, enabled)) }
-            .map_err(CgsWindowError::Events)
-    }
-
-    #[inline]
     pub fn set_blur(&self, radius: i32, style: Option<i32>) -> Result<(), CgsWindowError> {
         unsafe {
             cg_ok(if let Some(style) = style {
@@ -281,6 +301,20 @@ impl CgsWindow {
             } else {
                 SLSSetWindowBackgroundBlurRadius(self.connection, self.id, radius)
             })
+        }
+        .map_err(CgsWindowError::Blur)
+    }
+
+    pub fn disable_shadow(&self) -> Result<(), CgsWindowError> {
+        unsafe {
+            cg_ok(SLSSetWindowShadowParameters(
+                self.connection,
+                self.id,
+                0.0,
+                0.0,
+                0,
+                0,
+            ))
         }
         .map_err(CgsWindowError::Blur)
     }
@@ -315,6 +349,59 @@ impl CgsWindow {
     pub fn move_to(&self, origin: CGPoint) -> Result<(), CgsWindowError> {
         unsafe { cg_ok(SLSMoveWindow(self.connection, self.id, &origin)) }
             .map_err(CgsWindowError::Shape)
+    }
+
+    pub fn sync_above(
+        &self,
+        target: WindowId,
+        origin: CGPoint,
+        level: i32,
+        sub_level: i32,
+    ) -> Result<(), CgsWindowError> {
+        let transaction = NonNull::new(unsafe { SLSTransactionCreate(self.connection) })
+            .ok_or(CgsWindowError::Transaction(CGError(1000)))?;
+        let transaction = unsafe { CFRetained::<CFType>::from_raw(transaction) };
+        let ptr = CFRetained::as_ptr(&transaction).as_ptr();
+        let transform = CGAffineTransform {
+            a: 1.0,
+            b: 0.0,
+            c: 0.0,
+            d: 1.0,
+            tx: -origin.x,
+            ty: -origin.y,
+        };
+        unsafe {
+            SLSTransactionMoveWindowWithGroup(ptr, self.id, origin);
+            SLSTransactionSetWindowTransform(ptr, self.id, 0, 0, transform);
+            SLSTransactionSetWindowLevel(ptr, self.id, level);
+            SLSTransactionSetWindowSubLevel(ptr, self.id, sub_level);
+            SLSTransactionOrderWindow(ptr, self.id, 1, target);
+            SLSTransactionCommit(ptr, 0);
+        }
+        Ok(())
+    }
+
+    pub fn disable_updates(&self) -> Result<(), CgsWindowError> {
+        unsafe { cg_ok(SLSDisableUpdate(self.connection)) }.map_err(CgsWindowError::Shape)
+    }
+
+    pub fn reenable_updates(&self) -> Result<(), CgsWindowError> {
+        unsafe { cg_ok(SLSReenableUpdate(self.connection)) }.map_err(CgsWindowError::Shape)
+    }
+
+    pub fn freeze(&self) -> Result<(), CgsWindowError> {
+        unsafe {
+            cg_ok(SLSWindowFreezeWithOptions(
+                self.connection,
+                self.id,
+                ptr::null_mut(),
+            ))
+        }
+        .map_err(CgsWindowError::Shape)
+    }
+
+    pub fn thaw(&self) -> Result<(), CgsWindowError> {
+        unsafe { cg_ok(SLSWindowThaw(self.connection, self.id)) }.map_err(CgsWindowError::Shape)
     }
 
     pub fn move_to_space(&self, space: crate::sys::screen::SpaceId) {
@@ -475,6 +562,11 @@ impl Drop for CgsWindow {
             }
             if let Err(err) = cg_ok(SLSReleaseWindow(self.connection, self.id)) {
                 tracing::warn!(error=?err, id=self.id, "failed to release CGS window");
+            }
+            if self.owns_connection
+                && let Err(err) = cg_ok(SLSReleaseConnection(self.connection))
+            {
+                tracing::warn!(error=?err, cid=self.connection, "failed to release CGS connection");
             }
         }
     }
