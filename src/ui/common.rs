@@ -17,17 +17,21 @@ pub fn render_layer_to_cgs_window(window_id: u32, size: CGSize, layer: &CALayer)
             return;
         }
 
-        let clear = CGRect::new(CGPoint::new(0.0, 0.0), size);
-        CGContext::clear_rect(Some(&*ctx), clear);
-        CGContext::save_g_state(Some(&*ctx));
-        CGContext::translate_ctm(Some(&*ctx), 0.0, size.height);
-        CGContext::scale_ctm(Some(&*ctx), 1.0, -1.0);
-        layer.renderInContext(&*ctx);
-        CGContext::restore_g_state(Some(&*ctx));
-        CGContext::flush(Some(&*ctx));
+        render_layer_to_context(&*ctx, size, layer);
         SLSFlushWindowContentRegion(*G_CONNECTION, window_id, ptr::null_mut());
         CFRelease(ctx as *mut CFType);
     }
+}
+
+pub fn render_layer_to_context(context: &CGContext, size: CGSize, layer: &CALayer) {
+    let clear = CGRect::new(CGPoint::ZERO, size);
+    CGContext::clear_rect(Some(context), clear);
+    CGContext::save_g_state(Some(context));
+    CGContext::translate_ctm(Some(context), 0.0, size.height);
+    CGContext::scale_ctm(Some(context), 1.0, -1.0);
+    layer.renderInContext(context);
+    CGContext::restore_g_state(Some(context));
+    CGContext::flush(Some(context));
 }
 
 pub fn with_disabled_actions<F, R>(f: F) -> R

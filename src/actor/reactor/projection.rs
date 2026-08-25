@@ -49,9 +49,11 @@ impl Reactor {
         }
 
         let window_server_id = state.info.sys_id?;
+        let space = self.best_space_for_window_id(window)?;
         self.state.windows.is_window_visible(window_server_id).then_some(BorderTarget {
             window,
             window_server_id,
+            space,
             frame: state.frame_monotonic,
         })
     }

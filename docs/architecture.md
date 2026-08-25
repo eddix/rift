@@ -36,10 +36,14 @@ context renderer clears in logical-point coordinates. HiDPI changes only the
 the CGContext clear/render transform can leave uninitialized opaque pixels over
 the target window.
 
-The border's WindowServer shape is a union of four edge rectangles, not a full
-window-sized rectangle with a transparent center. Consequently the target's
-content area is absent from the overlay geometry and cannot become an opaque
-cover during WindowServer surface recreation.
+The border uses one transparent buffered WindowServer window with a persistent
+CGContext. Origin-only movement uses `SLSMoveWindow` and never reshapes the
+backing store. A size or style change first hides the overlay, then reshapes and
+redraws it before restoring alpha. This ordering prevents an uninitialized
+backing surface from being presented over the target window while preserving a
+continuous rounded border. The overlay is explicitly excluded from pointer-event
+delivery, in addition to carrying WindowServer's ignore-for-events tag, so its
+full rectangular surface cannot intercept scrolling or clicks.
 
 The remaining migration is deliberately incremental:
 

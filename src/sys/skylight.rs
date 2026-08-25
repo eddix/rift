@@ -506,8 +506,19 @@ unsafe extern "C" {
         context: *mut c_void,
     ) -> CGError;
     pub fn SLSReleaseWindow(cid: cid_t, wid: u32) -> CGError;
+    pub fn SLSNewWindow(
+        cid: cid_t,
+        backing_type: c_int,
+        x: f32,
+        y: f32,
+        region: *mut CFType,
+        out_wid: *mut u32,
+    ) -> CGError;
+    pub fn SLSMoveWindow(cid: cid_t, wid: u32, origin: *const CGPoint) -> CGError;
+    pub fn SLSMoveWindowsToManagedSpace(cid: cid_t, windows: *mut CFArray<CFNumber>, sid: u64);
     pub fn SLSSetWindowResolution(cid: cid_t, wid: u32, resolution: f64) -> CGError;
     pub fn SLSSetWindowAlpha(cid: cid_t, wid: u32, alpha: f32) -> CGError;
+    pub fn SLSSetMouseEventEnableFlags(cid: cid_t, wid: u32, enabled: bool) -> CGError;
     pub fn SLSSetWindowBackgroundBlurRadiusStyle(
         cid: cid_t,
         wid: u32,
@@ -530,7 +541,6 @@ unsafe extern "C" {
     pub fn SLSClearWindowTags(cid: cid_t, wid: u32, tags: *mut u64, tag_count: c_int) -> CGError;
     pub fn CGSNewRegionWithRect(rect: *const CGRect, region: *mut *mut CFType) -> CGError;
     pub fn CGRegionCreateEmptyRegion() -> *mut CFType;
-    pub fn CGRegionCreateWithRects(rects: *const CGRect, count: usize) -> *mut CFType;
     pub fn SLWindowContextCreate(cid: cid_t, wid: u32, options: *mut CFType) -> *mut CGContext;
     pub fn SLSSetWindowProperty(
         cid: cid_t,

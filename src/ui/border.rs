@@ -1,13 +1,16 @@
 use objc2::rc::Retained;
 use objc2_app_kit::{NSColor, NSNormalWindowLevel};
-use objc2_core_foundation::{CGPoint, CGRect, CGSize};
+use objc2_core_foundation::{CFRetained, CGPoint, CGRect, CGSize};
+use objc2_core_graphics::CGContext;
 use objc2_quartz_core::CALayer;
 
 use crate::common::config::BorderSettings;
 use crate::model::projection::BorderTarget;
 use crate::sys::cgs_window::{CgsWindow, CgsWindowError};
+use crate::sys::screen::SpaceId;
+use crate::sys::skylight::SLSWindowTags;
 use crate::sys::window_server::WindowServerId;
-use crate::ui::common::{render_layer_to_cgs_window, with_disabled_actions};
+use crate::ui::common::{render_layer_to_context, with_disabled_actions};
 
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct BorderStyle {
@@ -18,7 +21,7 @@ pub struct BorderStyle {
 }
 
 impl BorderStyle {
-    fn contents_scale(self) -> f64 { if self.hidpi { 2.0 } else { 1.0 } }
+    fn resolution(self) -> f64 { if self.hidpi { 2.0 } else { 1.0 } }
 }
 
 impl From<BorderSettings> for BorderStyle {
@@ -36,34 +39,41 @@ pub struct FocusBorderWindow {
     target: WindowServerId,
     frame: CGRect,
     style: BorderStyle,
+    space: SpaceId,
     root_layer: Retained<CALayer>,
     cgs_window: CgsWindow,
+    context: CFRetained<CGContext>,
 }
 
 impl FocusBorderWindow {
     pub fn new(target: BorderTarget, style: BorderStyle) -> Result<Self, CgsWindowError> {
         let frame = surface_frame(target.frame, style.width);
         let root_layer = CALayer::layer();
-        root_layer.setFrame(local_frame(frame.size));
-        root_layer.setContentsScale(style.contents_scale());
-        root_layer.setOpaque(false);
+        configure_layer(&root_layer, frame.size, style);
 
-        let cgs_window = CgsWindow::new(frame)?;
+        let cgs_window = CgsWindow::new_overlay(frame)?;
         cgs_window.set_opacity(false)?;
-        cgs_window.set_alpha(1.0)?;
+        cgs_window.set_alpha(0.0)?;
         cgs_window.set_level(NSNormalWindowLevel as i32)?;
-        cgs_window.set_tags(1 << 3)?;
-        set_ring_shape(&cgs_window, frame, style.width)?;
+        cgs_window.set_tags(border_window_tags().bits())?;
+        cgs_window.clear_tags(SLSWindowTags::OPAQUE_FOR_EVENTS.bits())?;
+        cgs_window.set_mouse_events_enabled(false)?;
+        cgs_window.set_resolution(style.resolution())?;
+        cgs_window.move_to_space(target.space);
+        let context = cgs_window.create_context()?;
 
         let window = Self {
             target: target.window_server_id,
             frame,
             style,
+            space: target.space,
             root_layer,
             cgs_window,
+            context,
         };
-        window.redraw();
+        window.redraw()?;
         window.order_above_target()?;
+        window.cgs_window.set_alpha(1.0)?;
         Ok(window)
     }
 
@@ -74,43 +84,44 @@ impl FocusBorderWindow {
     ) -> Result<(), CgsWindowError> {
         let next_frame = surface_frame(target.frame, style.width);
         let size_changed = self.frame.size != next_frame.size;
-        let frame_changed = self.frame != next_frame;
+        let origin_changed = self.frame.origin != next_frame.origin;
         let style_changed = self.style != style;
-        let shape_changed = frame_changed || self.style.width != style.width;
+        let resolution_changed = self.style.hidpi != style.hidpi;
 
-        if shape_changed {
-            set_ring_shape(&self.cgs_window, next_frame, style.width)?;
+        if self.space != target.space {
+            self.cgs_window.move_to_space(target.space);
+            self.space = target.space;
         }
-        if frame_changed {
-            self.frame = next_frame;
-        }
-        if style_changed {
-            self.root_layer.setContentsScale(style.contents_scale());
-            self.style = style;
-        }
+
         if size_changed || style_changed {
-            self.root_layer.setFrame(local_frame(next_frame.size));
-            self.redraw();
+            self.cgs_window.set_alpha(0.0)?;
+            if size_changed {
+                self.cgs_window.set_shape(next_frame)?;
+                self.frame = next_frame;
+            } else if origin_changed {
+                self.cgs_window.move_to(next_frame.origin)?;
+                self.frame.origin = next_frame.origin;
+            }
+            if resolution_changed {
+                self.cgs_window.set_resolution(style.resolution())?;
+                self.context = self.cgs_window.create_context()?;
+            }
+            self.style = style;
+            configure_layer(&self.root_layer, self.frame.size, style);
+            self.redraw()?;
+            self.cgs_window.set_alpha(1.0)?;
+        } else if origin_changed {
+            self.cgs_window.move_to(next_frame.origin)?;
+            self.frame.origin = next_frame.origin;
         }
 
         self.target = target.window_server_id;
         self.order_above_target()
     }
 
-    fn redraw(&self) {
-        let (red, green, blue, alpha) = argb_components(self.style.color);
-        let color = NSColor::colorWithRed_green_blue_alpha(red, green, blue, alpha);
-        let clear = NSColor::clearColor();
-        let bounds = local_frame(self.frame.size);
-        with_disabled_actions(|| {
-            self.root_layer.setFrame(bounds);
-            self.root_layer.setOpaque(false);
-            self.root_layer.setBackgroundColor(Some(&clear.CGColor()));
-            self.root_layer.setBorderWidth(self.style.width);
-            self.root_layer.setBorderColor(Some(&color.CGColor()));
-            self.root_layer.setCornerRadius(self.style.corner_radius + self.style.width);
-        });
-        render_layer_to_cgs_window(self.cgs_window.id(), self.frame.size, &self.root_layer);
+    fn redraw(&self) -> Result<(), CgsWindowError> {
+        render_layer_to_context(&self.context, self.frame.size, &self.root_layer);
+        self.cgs_window.flush_content()
     }
 
     fn order_above_target(&self) -> Result<(), CgsWindowError> {
@@ -118,7 +129,26 @@ impl FocusBorderWindow {
     }
 }
 
-fn local_frame(size: CGSize) -> CGRect { CGRect::new(CGPoint::ZERO, size) }
+fn configure_layer(layer: &CALayer, size: CGSize, style: BorderStyle) {
+    let (red, green, blue, alpha) = argb_components(style.color);
+    let color = NSColor::colorWithRed_green_blue_alpha(red, green, blue, alpha);
+    let clear = NSColor::clearColor();
+    with_disabled_actions(|| {
+        layer.setFrame(CGRect::new(CGPoint::ZERO, size));
+        layer.setContentsScale(style.resolution());
+        layer.setOpaque(false);
+        layer.setBackgroundColor(Some(&clear.CGColor()));
+        layer.setBorderWidth(style.width);
+        layer.setBorderColor(Some(&color.CGColor()));
+        layer.setCornerRadius(style.corner_radius + style.width);
+    });
+}
+
+fn border_window_tags() -> SLSWindowTags {
+    SLSWindowTags::FLOATING
+        | SLSWindowTags::DISABLE_SHADOW
+        | SLSWindowTags::IGNORE_FOR_EVENTS
+}
 
 fn argb_components(color: u32) -> (f64, f64, f64, f64) {
     let component = |shift: u32| f64::from((color >> shift) & 0xff_u32) / 255.0;
@@ -130,33 +160,6 @@ fn surface_frame(target: CGRect, width: f64) -> CGRect {
         CGPoint::new(target.origin.x - width, target.origin.y - width),
         CGSize::new(target.size.width + width * 2.0, target.size.height + width * 2.0),
     )
-}
-
-fn set_ring_shape(window: &CgsWindow, frame: CGRect, width: f64) -> Result<(), CgsWindowError> {
-    let regions = ring_regions(frame.size, width);
-    window.set_shape_regions(frame.origin, &regions)
-}
-
-fn ring_regions(size: CGSize, width: f64) -> Vec<CGRect> {
-    let width = width.max(0.0).min(size.width / 2.0).min(size.height / 2.0);
-    let inner_height = (size.height - width * 2.0).max(0.0);
-    let mut regions = Vec::with_capacity(4);
-    regions.push(CGRect::new(CGPoint::ZERO, CGSize::new(size.width, width)));
-    regions.push(CGRect::new(
-        CGPoint::new(0.0, size.height - width),
-        CGSize::new(size.width, width),
-    ));
-    if inner_height > 0.0 {
-        regions.push(CGRect::new(
-            CGPoint::new(0.0, width),
-            CGSize::new(width, inner_height),
-        ));
-        regions.push(CGRect::new(
-            CGPoint::new(size.width - width, width),
-            CGSize::new(width, inner_height),
-        ));
-    }
-    regions
 }
 
 #[cfg(test)]
@@ -184,17 +187,10 @@ mod tests {
     }
 
     #[test]
-    fn ring_regions_should_not_include_the_window_center() {
-        let size = CGSize::new(808.0, 608.0);
-        let regions = ring_regions(size, 4.0);
-        let center = CGPoint::new(size.width / 2.0, size.height / 2.0);
-
-        assert_eq!(regions.len(), 4);
-        assert!(!regions.iter().any(|region| {
-            center.x >= region.origin.x
-                && center.x < region.origin.x + region.size.width
-                && center.y >= region.origin.y
-                && center.y < region.origin.y + region.size.height
-        }));
+    fn overlay_tags_should_pass_pointer_events_through() {
+        let tags = border_window_tags();
+        assert!(tags.contains(SLSWindowTags::FLOATING));
+        assert!(tags.contains(SLSWindowTags::IGNORE_FOR_EVENTS));
+        assert!(!tags.contains(SLSWindowTags::OPAQUE_FOR_EVENTS));
     }
 }
