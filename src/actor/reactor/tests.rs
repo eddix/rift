@@ -883,6 +883,37 @@ fn active_display_update_only_changes_command_context() {
 }
 
 #[test]
+fn active_display_update_publishes_destination_workspace_to_menu_bar() {
+    let mut reactor = test_reactor();
+    let left = CGRect::new(CGPoint::new(0., 0.), CGSize::new(1000., 1000.));
+    let right = CGRect::new(CGPoint::new(1000., 0.), CGSize::new(1000., 1000.));
+    let left_space = SpaceId::new(1);
+    let right_space = SpaceId::new(2);
+    reactor.handle_event(space_state_event(vec![left, right], vec![
+        Some(left_space),
+        Some(right_space),
+    ]));
+    let terminal_workspace = reactor.test_workspace(right_space, 2);
+    assert!(reactor.set_test_active_workspace(right_space, terminal_workspace));
+    let (menu_tx, mut menu_rx) = actor::channel();
+    reactor.menu_manager.menu_tx = Some(menu_tx);
+
+    reactor.handle_event(Event::ActiveDisplayChanged {
+        menu_bar_space: Some(right_space),
+        command_space: Some(right_space),
+    });
+    let (_, event) = menu_rx.try_recv().expect("active display should publish a menu update");
+    let menu_bar::Event::Update(update) = event else {
+        panic!("expected menu update");
+    };
+
+    assert_eq!(
+        (update.active_space, update.active_workspace_idx),
+        (right_space, Some(2))
+    );
+}
+
+#[test]
 fn passive_command_space_change_does_not_override_clicked_window_focus() {
     let (mut apps, mut reactor) = test_context();
     let (raise_manager_tx, mut raise_manager_rx) = actor::channel();

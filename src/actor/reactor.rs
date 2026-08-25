@@ -1662,8 +1662,12 @@ impl Reactor {
                 return Ok(outcome);
             }
             Event::ActiveDisplayChanged { menu_bar_space, command_space } => {
+                let menu_bar_space_changed = self.space_state.menu_bar_space != menu_bar_space;
                 self.space_state.menu_bar_space = menu_bar_space;
                 self.space_state.command_space = command_space;
+                if menu_bar_space_changed {
+                    self.maybe_send_menu_update();
+                }
                 return Ok(EventOutcome::default());
             }
             Event::MouseUp => {
