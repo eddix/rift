@@ -1,7 +1,7 @@
 use std::path::Path;
 use std::process::Command as ProcessCommand;
 use std::sync::mpsc::{self, RecvTimeoutError};
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use objc2::MainThreadMarker;
 use tokio::sync::mpsc::UnboundedSender;
@@ -295,20 +295,31 @@ impl Menu {
         std::thread::spawn(move || {
             loop {
                 match cmd_rx.recv() {
-                    Ok(DebounceCommand::Arm) => loop {
-                        match cmd_rx.recv_timeout(period) {
-                            Ok(DebounceCommand::Arm) => continue,
-                            Ok(DebounceCommand::Shutdown) | Err(RecvTimeoutError::Disconnected) => {
-                                return;
-                            }
-                            Err(RecvTimeoutError::Timeout) => {
+                    Ok(DebounceCommand::Arm) => {
+                        let deadline = Instant::now() + period;
+                        loop {
+                            let now = Instant::now();
+                            if now >= deadline {
                                 if tick_tx.send(()).is_err() {
                                     return;
                                 }
                                 break;
                             }
+                            match cmd_rx.recv_timeout(deadline.saturating_duration_since(now)) {
+                                Ok(DebounceCommand::Arm) => continue,
+                                Ok(DebounceCommand::Shutdown)
+                                | Err(RecvTimeoutError::Disconnected) => {
+                                    return;
+                                }
+                                Err(RecvTimeoutError::Timeout) => {
+                                    if tick_tx.send(()).is_err() {
+                                        return;
+                                    }
+                                    break;
+                                }
+                            }
                         }
-                    },
+                    }
                     Ok(DebounceCommand::Shutdown) | Err(_) => return,
                 }
             }
@@ -376,7 +387,10 @@ fn hash_str(s: &str) -> u64 {
 
 #[cfg(test)]
 mod tests {
-    use super::sig;
+    use std::thread;
+    use std::time::{Duration, Instant};
+
+    use super::{DebounceCommand, Menu, sig};
     use crate::model::server::RuntimeWorkspaceData;
 
     fn workspace(layout_mode: &str) -> RuntimeWorkspaceData {
@@ -400,5 +414,35 @@ mod tests {
         let after = sig(true, &changed);
 
         assert_ne!(before, after);
+    }
+
+    #[test]
+    fn debouncer_emits_within_one_period_during_continuous_updates() {
+        let period = Duration::from_millis(40);
+        let spam_duration = Duration::from_millis(250);
+        let (tick_tx, mut tick_rx) = tokio::sync::mpsc::unbounded_channel();
+        let debounce_tx = Menu::spawn_debouncer(period, tick_tx);
+        let spam_tx = debounce_tx.clone();
+        let spammer = thread::spawn(move || {
+            let deadline = Instant::now() + spam_duration;
+            while Instant::now() < deadline {
+                if spam_tx.send(DebounceCommand::Arm).is_err() {
+                    break;
+                }
+                thread::sleep(Duration::from_millis(5));
+            }
+        });
+
+        let started = Instant::now();
+        debounce_tx.send(DebounceCommand::Arm).unwrap();
+        tick_rx.blocking_recv().expect("debouncer should emit a tick");
+        let elapsed = started.elapsed();
+        let _ = debounce_tx.send(DebounceCommand::Shutdown);
+        spammer.join().unwrap();
+
+        assert!(
+            elapsed < Duration::from_millis(200),
+            "continuous updates starved the menu refresh for {elapsed:?}"
+        );
     }
 }
