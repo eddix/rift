@@ -530,6 +530,7 @@ unsafe extern "C" {
     pub fn SLSClearWindowTags(cid: cid_t, wid: u32, tags: *mut u64, tag_count: c_int) -> CGError;
     pub fn CGSNewRegionWithRect(rect: *const CGRect, region: *mut *mut CFType) -> CGError;
     pub fn CGRegionCreateEmptyRegion() -> *mut CFType;
+    pub fn CGRegionCreateWithRects(rects: *const CGRect, count: usize) -> *mut CFType;
     pub fn SLWindowContextCreate(cid: cid_t, wid: u32, options: *mut CFType) -> *mut CGContext;
     pub fn SLSSetWindowProperty(
         cid: cid_t,
