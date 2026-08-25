@@ -1,5 +1,5 @@
 use objc2::rc::Retained;
-use objc2_app_kit::{NSColor, NSNormalWindowLevel};
+use objc2_app_kit::NSColor;
 use objc2_core_foundation::{CFRetained, CGPoint, CGRect, CGSize};
 use objc2_core_graphics::CGContext;
 use objc2_quartz_core::CALayer;
@@ -9,7 +9,7 @@ use crate::model::projection::BorderTarget;
 use crate::sys::cgs_window::{CgsWindow, CgsWindowError};
 use crate::sys::screen::SpaceId;
 use crate::sys::skylight::SLSWindowTags;
-use crate::sys::window_server::WindowServerId;
+use crate::sys::window_server::{self, WindowServerId};
 use crate::ui::common::{render_layer_to_context, with_disabled_actions};
 
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -52,12 +52,11 @@ impl FocusBorderWindow {
         configure_layer(&root_layer, frame.size, style);
 
         let cgs_window = CgsWindow::new_overlay(frame)?;
-        cgs_window.set_opacity(false)?;
-        cgs_window.set_alpha(0.0)?;
-        cgs_window.set_level(NSNormalWindowLevel as i32)?;
         cgs_window.set_tags(border_window_tags().bits())?;
-        cgs_window.clear_tags(SLSWindowTags::OPAQUE_FOR_EVENTS.bits())?;
-        cgs_window.set_mouse_events_enabled(false)?;
+        cgs_window.clear_tags(0)?;
+        cgs_window.set_opacity(false)?;
+        cgs_window.disable_shadow()?;
+        cgs_window.set_alpha(0.0)?;
         cgs_window.set_resolution(style.resolution())?;
         cgs_window.move_to_space(target.space);
         let context = cgs_window.create_context()?;
@@ -72,7 +71,8 @@ impl FocusBorderWindow {
             context,
         };
         window.redraw()?;
-        window.order_above_target()?;
+        window.sync_order()?;
+        window.verify_event_passthrough()?;
         window.cgs_window.set_alpha(1.0)?;
         Ok(window)
     }
@@ -95,28 +95,37 @@ impl FocusBorderWindow {
 
         if size_changed || style_changed {
             self.cgs_window.set_alpha(0.0)?;
-            if size_changed {
-                self.cgs_window.set_shape(next_frame)?;
-                self.frame = next_frame;
-            } else if origin_changed {
-                self.cgs_window.move_to(next_frame.origin)?;
-                self.frame.origin = next_frame.origin;
+            self.cgs_window.disable_updates()?;
+            let update_result = (|| {
+                self.cgs_window.freeze()?;
+                if size_changed {
+                    self.cgs_window.set_shape(next_frame)?;
+                    self.frame = next_frame;
+                } else if origin_changed {
+                    self.frame.origin = next_frame.origin;
+                }
+                if resolution_changed {
+                    self.cgs_window.set_resolution(style.resolution())?;
+                    self.context = self.cgs_window.create_context()?;
+                }
+                self.style = style;
+                configure_layer(&self.root_layer, self.frame.size, style);
+                self.redraw()?;
+                self.cgs_window.thaw()
+            })();
+            if update_result.is_err() {
+                let _ = self.cgs_window.thaw();
             }
-            if resolution_changed {
-                self.cgs_window.set_resolution(style.resolution())?;
-                self.context = self.cgs_window.create_context()?;
-            }
-            self.style = style;
-            configure_layer(&self.root_layer, self.frame.size, style);
-            self.redraw()?;
+            let reenable_result = self.cgs_window.reenable_updates();
+            update_result?;
+            reenable_result?;
             self.cgs_window.set_alpha(1.0)?;
         } else if origin_changed {
-            self.cgs_window.move_to(next_frame.origin)?;
             self.frame.origin = next_frame.origin;
         }
 
         self.target = target.window_server_id;
-        self.order_above_target()
+        self.sync_order()
     }
 
     fn redraw(&self) -> Result<(), CgsWindowError> {
@@ -124,8 +133,30 @@ impl FocusBorderWindow {
         self.cgs_window.flush_content()
     }
 
-    fn order_above_target(&self) -> Result<(), CgsWindowError> {
-        self.cgs_window.order_above(Some(self.target.as_u32()))
+    pub fn sync_order(&self) -> Result<(), CgsWindowError> {
+        let level = window_server::window_level(self.target.as_u32())
+            .ok_or(CgsWindowError::Level(objc2_core_graphics::CGError(1000)))?;
+        let level = i32::try_from(level)
+            .map_err(|_| CgsWindowError::Level(objc2_core_graphics::CGError(1000)))?;
+        let sub_level = window_server::window_sub_level(self.target.as_u32());
+        self.cgs_window.sync_above(
+            self.target.as_u32(),
+            self.frame.origin,
+            level,
+            sub_level,
+        )
+    }
+
+    fn verify_event_passthrough(&self) -> Result<(), CgsWindowError> {
+        let tags = window_server::window_tags(self.cgs_window.id())
+            .ok_or(CgsWindowError::Events(objc2_core_graphics::CGError(1000)))?;
+        if tags.contains(SLSWindowTags::IGNORE_FOR_EVENTS)
+            && !tags.contains(SLSWindowTags::OPAQUE_FOR_EVENTS)
+        {
+            Ok(())
+        } else {
+            Err(CgsWindowError::Events(objc2_core_graphics::CGError(1000)))
+        }
     }
 }
 
@@ -145,9 +176,7 @@ fn configure_layer(layer: &CALayer, size: CGSize, style: BorderStyle) {
 }
 
 fn border_window_tags() -> SLSWindowTags {
-    SLSWindowTags::FLOATING
-        | SLSWindowTags::DISABLE_SHADOW
-        | SLSWindowTags::IGNORE_FOR_EVENTS
+    SLSWindowTags::FLOATING | SLSWindowTags::IGNORE_FOR_EVENTS
 }
 
 fn argb_components(color: u32) -> (f64, f64, f64, f64) {

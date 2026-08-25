@@ -283,6 +283,10 @@ Enable it in System Settings > Desktop & Dock (Mission Control) and restart Rift
             // Native focus wakeups. Payload identities are racy, so adjacent
             // events are coalesced before re-querying WindowServer key focus.
             CGSEventType::Known(KnownCGSEvent::WindowReordered),
+            CGSEventType::Known(KnownCGSEvent::WindowLevelChanged),
+            CGSEventType::Known(KnownCGSEvent::WindowManagerActivatingClickOrdering),
+            CGSEventType::Known(KnownCGSEvent::WindowOrderingGroupChanged),
+            CGSEventType::Known(KnownCGSEvent::WindowParentChanged),
             CGSEventType::Known(KnownCGSEvent::WindowUnhidden),
             CGSEventType::Known(KnownCGSEvent::WindowHidden),
             CGSEventType::Known(KnownCGSEvent::WindowManagerSpaceFrontConnectionChanged),
@@ -293,6 +297,7 @@ Enable it in System Settings > Desktop & Dock (Mission Control) and restart Rift
             //CGSEventType::Known(KnownCGSEvent::WindowResized),
         ],
         Some(window_tx_store.clone()),
+        border_tx.clone(),
     );
 
     let notification_center =

@@ -638,11 +638,19 @@ fn find_window_at_point(point: &mut CGPoint, below_window_id: Option<u32>) -> Op
     (wid != 0).then_some((wid, wcid))
 }
 
-fn is_own_window(cid: i32) -> bool { *G_CONNECTION == cid }
+fn is_own_process(pid: i32) -> bool { pid == std::process::id() as i32 }
+
+fn is_own_connection(cid: i32) -> bool {
+    if *G_CONNECTION == cid {
+        return true;
+    }
+    let mut pid = 0;
+    cg_ok(unsafe { SLSConnectionGetPID(cid, &mut pid) }).is_ok() && is_own_process(pid)
+}
 
 pub fn get_window_at_point(mut point: CGPoint) -> Option<WindowServerId> {
     let (mut wid, cid) = find_window_at_point(&mut point, None)?;
-    if is_own_window(cid) {
+    if is_own_connection(cid) {
         wid = find_window_at_point(&mut point, Some(wid))?.0;
     }
     Some(WindowServerId(wid))
@@ -662,7 +670,7 @@ pub fn is_point_occluded_by_external_window(mut point: CGPoint) -> bool {
 
     // Skip past any Rift-owned windows stacked at this point.
     while let Some((wid, cid)) = hit {
-        if !is_own_window(cid) {
+        if !is_own_connection(cid) {
             let level = window_level(wid).unwrap_or(NSWindowLevel::MIN);
             return level >= NSNormalWindowLevel;
         }
@@ -699,6 +707,16 @@ fn iterator_window_tags(iterator: *mut CFType) -> SLSWindowTags {
     SLSWindowTags::from_bits_retain(unsafe { SLSWindowIteratorGetTags(iterator) })
 }
 
+/// Returns the WindowServer tags currently applied to one window.
+///
+/// Querying the iterator is intentional: on current macOS releases the older
+/// direct `SLSGetWindowTags` entry point can report success with stale data.
+pub fn window_tags(wid: u32) -> Option<SLSWindowTags> {
+    let query = WindowIterator::new(&[WindowServerId::new(wid)])?;
+    query.advance()?;
+    Some(iterator_window_tags(query.iter))
+}
+
 /// Returns whether the tags describe a document or floating app window.
 fn tags_match_app_window_role(tags: SLSWindowTags) -> bool {
     tags.contains(SLSWindowTags::DOCUMENT) || tags.contains(SLSWindowTags::FLOATING)
@@ -708,10 +726,11 @@ fn tags_match_app_window_role(tags: SLSWindowTags) -> bool {
 fn iterator_window_suitable(iterator: *mut CFType) -> bool {
     let tags = iterator_window_tags(iterator);
     let parent_wid = unsafe { SLSWindowIteratorGetParentID(iterator) };
+    let pid = unsafe { SLSWindowIteratorGetPID(iterator) };
 
     // Previous Rust filter also required attribute/high-bit hints plus
     // ATTACHED, IGNORES_CYCLE, and DOCUMENT or (FLOATING && MODAL).
-    parent_wid == 0 && tags_match_app_window_role(tags)
+    parent_wid == 0 && !is_own_process(pid) && tags_match_app_window_role(tags)
 }
 
 // credit to yabai
@@ -773,10 +792,12 @@ pub fn space_window_list_for_connection(
     while iterator.advance().is_some() {
         let tags = iterator_window_tags(iterator.iter);
         let parent_id = iterator.parent_id();
+        let pid = iterator.pid();
         let wid = iterator.window_id();
         // Previous Rust path also checked level, attributes, and
         // fullscreen/minimized tag hints before accepting the window.
-        let is_candidate = parent_id == 0 && tags_match_app_window_role(tags);
+        let is_candidate =
+            parent_id == 0 && !is_own_process(pid) && tags_match_app_window_role(tags);
 
         if is_candidate {
             windows.push(wid);
