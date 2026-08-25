@@ -786,15 +786,14 @@ pub fn space_window_list_for_connection(
     windows
 }
 
-/// Resolve the actual key window on `space` from WindowServer state.
+/// Resolve the actual key window across all visible spaces from WindowServer state.
 ///
 /// The key-focus process can differ briefly from the globally frontmost process,
-/// especially during rapid focus changes. Scoping the native, z-ordered window
-/// list to that process avoids the delayed or missing `AXMainWindow` read used by
-/// the application actors. The returned id is intentionally independent of the
-/// reactor's tracked-window state so callers can use it to trigger discovery of
-/// a newly materialized native tab.
-pub fn key_focused_window(space: SpaceId) -> Option<WindowId> {
+/// especially during rapid focus changes. Querying every visible native space is
+/// required on multi-display setups because `CGSGetActiveSpace` reports only one
+/// display's context. The returned id is intentionally independent of the reactor's
+/// tracked-window state so callers can trigger discovery of a newly materialized tab.
+pub fn key_focused_window() -> Option<(WindowId, SpaceId)> {
     let mut psn = ProcessSerialNumber::default();
     let mut fallback = 0u8;
     if cg_ok(unsafe { SLPSGetKeyFocusProcess(&mut psn, &mut fallback) }).is_err() {
@@ -808,8 +807,8 @@ pub fn key_focused_window(space: SpaceId) -> Option<WindowId> {
 
     let filter = WindowQueryFilter {
         owner,
-        spaces: &[space.get()],
-        space_list_options: 0,
+        spaces: &[],
+        space_list_options: CGSSpaceMask::ALL_VISIBLE_SPACES.bits(),
         window_list_options: 0x2,
         query_flags: 0x2,
         include_tags: SLSWindowTags::DOCUMENT.bits(),
@@ -821,11 +820,15 @@ pub fn key_focused_window(space: SpaceId) -> Option<WindowId> {
     let query = window_query_run(&filter)?;
     query.advance()?;
     let wsid = WindowServerId::new(query.window_id());
+    let space = window_space(wsid).unwrap_or_else(active_space);
 
-    Some(WindowId {
-        pid: query.pid(),
-        idx: wsid.as_nonzero()?,
-    })
+    Some((
+        WindowId {
+            pid: query.pid(),
+            idx: wsid.as_nonzero()?,
+        },
+        space,
+    ))
 }
 
 /// The space on the display currently holding WindowServer focus.

@@ -8,6 +8,7 @@ mod animation;
 mod events;
 mod main_window;
 mod managers;
+mod projection;
 mod query;
 mod replay;
 pub mod transaction_manager;
@@ -91,7 +92,7 @@ use crate::actor::app::{
 use crate::actor::raise_manager::{self, RaiseManager, RaiseRequest};
 use crate::actor::reactor::events::window_discovery;
 use crate::actor::spaces::{ForwardedSpaceState, TopologyWindowDelta};
-use crate::actor::{self, menu_bar, stack_line};
+use crate::actor::{self, border, menu_bar, stack_line};
 use crate::common::collections::{BTreeMap, HashMap, HashSet};
 use crate::common::config::{Config, WorkspaceDisplayTarget};
 use crate::layout_engine::{self as layout, Direction, LayoutEngine, LayoutEvent, ResolvedWindow};
@@ -348,6 +349,7 @@ pub struct Reactor {
     notification_manager: managers::NotificationManager,
     transaction_manager: transaction_manager::TransactionManager,
     menu_manager: managers::MenuManager,
+    presentation_manager: managers::PresentationManager,
     mission_control_manager: managers::MissionControlManager,
     window_inventory_manager: managers::WindowInventoryManager,
     refocus_manager: managers::RefocusManager,
@@ -368,6 +370,7 @@ impl Reactor {
         event_tap_tx: event_tap::Sender,
         broadcast_tx: BroadcastSender,
         menu_tx: menu_bar::Sender,
+        border_tx: border::Sender,
         stack_line_tx: stack_line::Sender,
         window_notify: Option<(crate::actor::window_notify::Sender, WindowTxStore)>,
         gesture_tap_tx: Option<gesture_tap::Sender>,
@@ -384,7 +387,8 @@ impl Reactor {
             one_space,
         );
         reactor.communication_manager.event_tap_tx = Some(event_tap_tx);
-        reactor.menu_manager.menu_tx = Some(menu_tx);
+        reactor.presentation_manager.menu_tx = Some(menu_tx);
+        reactor.presentation_manager.border_tx = Some(border_tx);
         reactor.communication_manager.stack_line_tx = Some(stack_line_tx);
         reactor.communication_manager.gesture_tap_tx = gesture_tap_tx;
         reactor.communication_manager.events_tx = Some(events_tx_clone.clone());
@@ -452,9 +456,12 @@ impl Reactor {
                 _window_notify_tx: window_notify_tx,
             },
             transaction_manager: transaction_manager::TransactionManager::new(window_tx_store),
-            menu_manager: managers::MenuManager {
-                menu_state: MenuState::Closed,
+            menu_manager: managers::MenuManager { menu_state: MenuState::Closed },
+            presentation_manager: managers::PresentationManager {
                 menu_tx: None,
+                border_tx: None,
+                projections: crate::model::projection::ProjectionHub::default(),
+                transaction_depth: 0,
             },
             mission_control_manager: managers::MissionControlManager {
                 mission_control_state: MissionControlState::Inactive,
@@ -1131,6 +1138,8 @@ impl Reactor {
 
     #[instrument(name = "reactor::handle_event", skip(self), fields(event=?event))]
     fn handle_event(&mut self, event: Event) {
+        let affects_desktop_state = Self::event_affects_desktop_state(&event);
+        self.presentation_manager.transaction_depth += 1;
         let previously_focused_window = self.main_window();
         match self.dispatch_workflow(event) {
             Ok(mut outcome) => {
@@ -1144,6 +1153,27 @@ impl Reactor {
             }
             Err(error) => warn!(%error, "reactor workflow failed"),
         }
+
+        if affects_desktop_state {
+            self.presentation_manager.projections.mark_dirty();
+        }
+        self.presentation_manager.transaction_depth -= 1;
+        if self.presentation_manager.transaction_depth == 0 {
+            self.publish_desktop_snapshot();
+        }
+    }
+
+    fn event_affects_desktop_state(event: &Event) -> bool {
+        !matches!(
+            event,
+            Event::Query(..)
+                | Event::InstallIpc(..)
+                | Event::RegisterWmSender(..)
+                | Event::MenuOpened(..)
+                | Event::MenuClosed(..)
+                | Event::RaiseCompleted { .. }
+                | Event::RaiseTimeout { .. }
+        )
     }
 
     fn dispatch_workflow(&mut self, event: Event) -> anyhow::Result<EventOutcome> {
@@ -1662,12 +1692,8 @@ impl Reactor {
                 return Ok(outcome);
             }
             Event::ActiveDisplayChanged { menu_bar_space, command_space } => {
-                let menu_bar_space_changed = self.space_state.menu_bar_space != menu_bar_space;
                 self.space_state.menu_bar_space = menu_bar_space;
                 self.space_state.command_space = command_space;
-                if menu_bar_space_changed {
-                    self.maybe_send_menu_update();
-                }
                 return Ok(EventOutcome::default());
             }
             Event::MouseUp => {
@@ -2272,8 +2298,6 @@ impl Reactor {
                     outcome.arrange.space_scope,
                 );
             }
-            // Publish the menu state once after all arrange passes have completed.
-            self.maybe_send_menu_update();
         }
         if layout_changed
             && let Some(window) = outcome.post_arrange_mouse_warp
@@ -2350,10 +2374,15 @@ impl Reactor {
             {
                 warn!(%error, "failed to update stack line config");
             }
-            if let Some(tx) = &self.menu_manager.menu_tx
+            if let Some(tx) = &self.presentation_manager.menu_tx
                 && let Err(error) = tx.try_send(menu_bar::Event::ConfigUpdated(config.clone()))
             {
                 warn!(%error, "failed to update menu bar config");
+            }
+            if let Some(tx) = &self.presentation_manager.border_tx
+                && let Err(error) = tx.try_send(border::Event::ConfigUpdated(config.clone()))
+            {
+                warn!(%error, "failed to update border config");
             }
             if let Some(wm) = &self.communication_manager.wm_sender {
                 wm.send(crate::actor::wm_controller::WmEvent::ConfigUpdated(config));
@@ -4854,7 +4883,6 @@ impl Reactor {
         self.reconcile_authoritative_active_window_snapshot(active_windows, false);
         self.request_window_inventories();
         self.update_layout_or_warn(false, false, None);
-        self.maybe_send_menu_update();
     }
 
     fn has_user_space_context(&self) -> bool {

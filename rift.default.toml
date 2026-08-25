@@ -198,6 +198,18 @@ display_style = "layout"
 # .ron files in this folder appear under Layout Files in the menu bar
 layout_folder = "~/.config/rift/layouts"
 
+[settings.ui.border]
+# focused-window border (defaults to off)
+enabled = false
+# border width in logical points
+width = 4.0
+# ARGB color; this default matches the orange used by the local JankyBorders setup
+color = 0xfff37021
+# rounded corner radius in logical points
+corner_radius = 10.0
+# render using a 2x backing scale
+hidpi = true
+
 [settings.ui.stack_line]
 # experimental stack line indicator (defaults to off)
 enabled = false

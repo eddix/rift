@@ -896,21 +896,57 @@ fn active_display_update_publishes_destination_workspace_to_menu_bar() {
     let terminal_workspace = reactor.test_workspace(right_space, 2);
     assert!(reactor.set_test_active_workspace(right_space, terminal_workspace));
     let (menu_tx, mut menu_rx) = actor::channel();
-    reactor.menu_manager.menu_tx = Some(menu_tx);
+    reactor.presentation_manager.menu_tx = Some(menu_tx);
 
     reactor.handle_event(Event::ActiveDisplayChanged {
         menu_bar_space: Some(right_space),
         command_space: Some(right_space),
     });
     let (_, event) = menu_rx.try_recv().expect("active display should publish a menu update");
-    let menu_bar::Event::Update(update) = event else {
-        panic!("expected menu update");
+    let menu_bar::Event::Snapshot(snapshot) = event else {
+        panic!("expected desktop snapshot");
     };
+    let context = snapshot.state.menu_bar_context.as_ref().expect("menu bar context");
 
     assert_eq!(
-        (update.active_space, update.active_workspace_idx),
+        (context.active_space, context.active_workspace_idx),
         (right_space, Some(2))
     );
+}
+
+#[test]
+fn focus_change_publishes_one_committed_desktop_snapshot() {
+    let (mut apps, mut reactor) = test_context();
+    let space = SpaceId::new(1);
+    let screen = CGRect::new(CGPoint::new(0., 0.), CGSize::new(1000., 1000.));
+    let first = WindowId::new(1, 1);
+    let second = WindowId::new(1, 2);
+
+    reactor.handle_event(space_state_event(vec![screen], vec![Some(space)]));
+    reactor.handle_event(Event::ApplicationGloballyActivated(1));
+    reactor.handle_events(apps.make_app_with_opts(1, make_windows(2), Some(first), true, true));
+    apps.simulate_until_quiet(&mut reactor);
+
+    let (menu_tx, mut menu_rx) = actor::channel();
+    reactor.presentation_manager.menu_tx = Some(menu_tx);
+    reactor.handle_event(Event::ApplicationMainWindowChanged(1, Some(second), Quiet::No));
+
+    let (_, event) = menu_rx.try_recv().expect("focus change should publish a snapshot");
+    let menu_bar::Event::Snapshot(snapshot) = event else {
+        panic!("expected desktop snapshot");
+    };
+    assert!(
+        menu_rx.try_recv().is_err(),
+        "one transaction should publish once"
+    );
+    assert_eq!(snapshot.state.focused_window, Some(second));
+    assert_eq!(
+        snapshot.state.border_target.map(|target| target.window),
+        Some(second)
+    );
+
+    let context = snapshot.state.menu_bar_context.as_ref().expect("menu bar context");
+    assert!(context.windows.iter().any(|window| window.id == second && window.is_focused));
 }
 
 #[test]
@@ -1093,6 +1129,22 @@ fn menu_bar_space_falls_back_when_preferred_space_is_not_visible() {
         reactor.test_resolve_menu_bar_space_with_preferred(Some(hidden_space)),
         Some(visible_space),
         "menubar updates should fall back to the normal active context if the preferred menubar space is unavailable"
+    );
+}
+
+#[test]
+fn snapshot_projection_does_not_initialize_unknown_workspace_topology() {
+    let reactor = test_reactor();
+    let unknown_space = SpaceId::new(99);
+
+    assert!(reactor.snapshot_workspaces(unknown_space).is_empty());
+    assert!(
+        !reactor
+            .layout_manager
+            .layout_engine
+            .virtual_workspace_manager()
+            .initialized_spaces()
+            .contains(&unknown_space)
     );
 }
 

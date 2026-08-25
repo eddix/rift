@@ -1,5 +1,6 @@
 use std::path::Path;
 use std::process::Command as ProcessCommand;
+use std::sync::Arc;
 use std::sync::mpsc::{self, RecvTimeoutError};
 use std::time::{Duration, Instant};
 
@@ -9,24 +10,12 @@ use tokio::sync::mpsc::UnboundedSender;
 use crate::actor::{config, reactor};
 use crate::common::config::{Config, ConfigCommand};
 use crate::layout_engine::LayoutCommand;
-use crate::model::VirtualWorkspaceId;
-use crate::model::server::{RuntimeWindowData, RuntimeWorkspaceData};
-use crate::sys::screen::SpaceId;
+use crate::model::projection::{DesktopSnapshot, StateRevision};
 use crate::ui::menu_bar::{MenuAction, MenuIcon};
 use crate::{actor, common};
 
-#[derive(Debug, Clone)]
-pub struct Update {
-    pub active_space: SpaceId,
-    pub active_space_is_activated: bool,
-    pub workspaces: Vec<RuntimeWorkspaceData>,
-    pub active_workspace_idx: Option<u64>,
-    pub active_workspace: Option<VirtualWorkspaceId>,
-    pub windows: Vec<RuntimeWindowData>,
-}
-
 pub enum Event {
-    Update(Update),
+    Snapshot(Arc<DesktopSnapshot>),
     ConfigUpdated(Config),
 }
 
@@ -44,8 +33,8 @@ pub struct Menu {
     action_rx: tokio::sync::mpsc::UnboundedReceiver<MenuAction>,
     icon: Option<MenuIcon>,
     mtm: MainThreadMarker,
-    last_signature: Option<u64>,
-    last_update: Option<Update>,
+    last_snapshot: Option<Arc<DesktopSnapshot>>,
+    last_applied_revision: Option<StateRevision>,
 }
 
 pub type Sender = actor::Sender<Event>;
@@ -79,8 +68,8 @@ impl Menu {
             action_tx,
             action_rx,
             mtm,
-            last_signature: None,
-            last_update: None,
+            last_snapshot: None,
+            last_applied_revision: None,
         }
     }
 
@@ -111,7 +100,7 @@ impl Menu {
                         Some((span, event)) => {
                             let _enter = span.enter();
                             match event {
-                                Event::Update(_) => {
+                                Event::Snapshot(_) => {
                                     pending = Some(event);
                                     let _ = debounce_tx.send(DebounceCommand::Arm);
                                 }
@@ -139,28 +128,30 @@ impl Menu {
 
     fn handle_event(&mut self, event: Event) {
         match event {
-            Event::Update(update) => self.handle_update(update),
+            Event::Snapshot(snapshot) => self.handle_snapshot(snapshot),
             Event::ConfigUpdated(cfg) => self.handle_config_updated(cfg),
         }
     }
 
-    fn handle_update(&mut self, update: Update) {
-        self.apply_update(&update);
-        self.last_update = Some(update);
-    }
-
-    fn apply_update(&mut self, update: &Update) {
-        let Some(icon) = &mut self.icon else { return };
-
-        let sig = sig(update.active_space_is_activated, &update.workspaces);
-        if self.last_signature == Some(sig) {
+    fn handle_snapshot(&mut self, snapshot: Arc<DesktopSnapshot>) {
+        if self.last_applied_revision.is_some_and(|revision| revision >= snapshot.revision) {
             return;
         }
-        self.last_signature = Some(sig);
+        self.last_applied_revision = Some(snapshot.revision);
 
-        icon.sync_workspace_topology(&update.workspaces, &self.config.keys);
-        icon.update_menu_state(update.active_space_is_activated, &update.workspaces);
-        icon.update_status_icon(&update.workspaces, &self.config.settings.ui.menu_bar);
+        let Some(context) = snapshot.state.menu_bar_context.as_ref() else {
+            self.last_snapshot = Some(snapshot);
+            return;
+        };
+        let Some(icon) = &mut self.icon else {
+            self.last_snapshot = Some(snapshot);
+            return;
+        };
+
+        icon.sync_workspace_topology(&context.workspaces, &self.config.keys);
+        icon.update_menu_state(context.active_space_is_activated, &context.workspaces);
+        icon.update_status_icon(&context.workspaces, &self.config.settings.ui.menu_bar);
+        self.last_snapshot = Some(snapshot);
     }
 
     fn handle_config_updated(&mut self, new_config: Config) {
@@ -179,9 +170,9 @@ impl Menu {
             icon.update_config(&self.config.settings.ui.menu_bar, &self.config.keys);
         }
 
-        self.last_signature = None;
-        if let Some(update) = self.last_update.take() {
-            self.handle_update(update);
+        self.last_applied_revision = None;
+        if let Some(snapshot) = self.last_snapshot.take() {
+            self.handle_snapshot(snapshot);
         }
     }
 
@@ -329,92 +320,12 @@ impl Menu {
     }
 }
 
-// this is kind of reinventing the wheel but oh well i am using my brain
-#[inline(always)]
-fn sig(active_space_is_activated: bool, workspaces: &[RuntimeWorkspaceData]) -> u64 {
-    let mut x = (workspaces.len() as u64).rotate_left(13);
-    if active_space_is_activated {
-        x ^= 0x9E37_79B9_7F4A_7C15u64;
-    }
-    let mut s = (workspaces.len() as u64).rotate_left(5);
-
-    for ws in workspaces {
-        let v = workspace_sig(ws);
-        x ^= v.rotate_left(9);
-        s = s.wrapping_add(v);
-    }
-
-    x ^ s.rotate_left(29) ^ (s >> 17)
-}
-
-#[inline(always)]
-fn workspace_sig(ws: &RuntimeWorkspaceData) -> u64 {
-    let mut x = (ws.index as u64).rotate_left(3)
-        ^ (ws.window_count as u64).rotate_left(19)
-        ^ hash_str(&ws.id).rotate_left(11)
-        ^ hash_str(&ws.name).rotate_left(17)
-        ^ hash_str(&ws.layout_mode).rotate_left(23);
-    if ws.is_active {
-        x ^= 0xD6E8_FEB8_6659_FD93u64;
-    }
-    let mut s = x ^ (ws.windows.len() as u64).rotate_left(7);
-    for w in &ws.windows {
-        let v = window_sig(w).rotate_left(13);
-        x ^= v;
-        s = s.wrapping_add(v);
-    }
-    x ^ s.rotate_left(21) ^ (s >> 11)
-}
-
-#[inline(always)]
-fn window_sig(w: &RuntimeWindowData) -> u64 {
-    (w.id.idx.get() as u64)
-        ^ w.info.frame.origin.x.to_bits().rotate_left(11)
-        ^ w.info.frame.origin.y.to_bits().rotate_left(23)
-        ^ w.info.frame.size.width.to_bits().rotate_left(37)
-        ^ w.info.frame.size.height.to_bits().rotate_left(51)
-}
-
-#[inline(always)]
-fn hash_str(s: &str) -> u64 {
-    let mut x = 0xcbf2_9ce4_8422_2325u64;
-    for &b in s.as_bytes() {
-        x ^= b as u64;
-        x = x.wrapping_mul(0x0000_0100_0000_01B3);
-    }
-    x
-}
-
 #[cfg(test)]
 mod tests {
     use std::thread;
     use std::time::{Duration, Instant};
 
-    use super::{DebounceCommand, Menu, sig};
-    use crate::model::server::RuntimeWorkspaceData;
-
-    fn workspace(layout_mode: &str) -> RuntimeWorkspaceData {
-        RuntimeWorkspaceData {
-            id: "VirtualWorkspaceId(1v1)".to_string(),
-            index: 0,
-            name: "main".to_string(),
-            layout_mode: layout_mode.to_string(),
-            is_active: true,
-            window_count: 1,
-            windows: Vec::new(),
-        }
-    }
-
-    #[test]
-    fn signature_changes_when_workspace_layout_mode_changes() {
-        let base = vec![workspace("bsp")];
-        let changed = vec![workspace("master_stack")];
-
-        let before = sig(true, &base);
-        let after = sig(true, &changed);
-
-        assert_ne!(before, after);
-    }
+    use super::{DebounceCommand, Menu};
 
     #[test]
     fn debouncer_emits_within_one_period_during_continuous_updates() {

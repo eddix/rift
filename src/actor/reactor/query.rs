@@ -7,7 +7,6 @@ use rift_protocol::{
 };
 
 use crate::actor::app::WindowId;
-use crate::actor::menu_bar;
 use crate::actor::reactor::{Event, Reactor, Sender};
 use crate::common::collections::{HashMap, HashSet};
 use crate::model::server::{
@@ -259,35 +258,7 @@ impl Reactor {
 
     pub fn query_metrics(&self) -> serde_json::Value { self.handle_metrics_query() }
 
-    pub(super) fn maybe_send_menu_update(&mut self) {
-        let menu_tx = match self.menu_manager.menu_tx.as_ref() {
-            Some(tx) => tx.clone(),
-            None => return,
-        };
-
-        let active_space = match self.menu_bar_space() {
-            Some(space) => space,
-            None => return,
-        };
-
-        let workspaces = self.handle_workspace_query(Some(active_space));
-        let active_space_is_activated = self.is_space_active(active_space);
-        let active_workspace = self.layout_manager.layout_engine.active_workspace(active_space);
-        let active_workspace_idx =
-            self.layout_manager.layout_engine.active_workspace_idx(active_space);
-        let windows = self.handle_windows_query(Some(active_space));
-
-        menu_tx.send(menu_bar::Event::Update(menu_bar::Update {
-            active_space,
-            active_space_is_activated,
-            workspaces,
-            active_workspace_idx,
-            active_workspace,
-            windows,
-        }));
-    }
-
-    fn menu_bar_space(&self) -> Option<SpaceId> {
+    pub(super) fn menu_bar_space(&self) -> Option<SpaceId> {
         self.resolve_menu_bar_space_with_preferred(self.space_state.menu_bar_space)
     }
 
@@ -314,69 +285,69 @@ impl Reactor {
         &mut self,
         space_id_param: Option<SpaceId>,
     ) -> Vec<RuntimeWorkspaceData> {
-        let mut workspaces = Vec::new();
+        let Some(space) = space_id_param.or_else(|| self.default_query_space()) else {
+            return Vec::new();
+        };
+        let workspace_list = self
+            .layout_manager
+            .layout_engine
+            .virtual_workspace_manager_mut()
+            .list_workspaces(space);
+        self.project_workspaces(space, &workspace_list)
+    }
 
-        let space_id = space_id_param.or_else(|| self.default_query_space());
-        let workspace_list: Vec<(crate::model::VirtualWorkspaceId, String)> =
-            if let Some(space) = space_id {
-                self.layout_manager
-                    .layout_engine
-                    .virtual_workspace_manager_mut()
-                    .list_workspaces(space)
-            } else {
-                Vec::new()
-            };
+    /// Build observable workspace data without initializing or mutating topology.
+    pub(super) fn snapshot_workspaces(&self, space: SpaceId) -> Vec<RuntimeWorkspaceData> {
+        let workspace_list = self
+            .layout_manager
+            .layout_engine
+            .virtual_workspace_manager()
+            .existing_workspaces(space);
+        self.project_workspaces(space, &workspace_list)
+    }
+
+    fn project_workspaces(
+        &self,
+        space: SpaceId,
+        workspace_list: &[(crate::model::VirtualWorkspaceId, String)],
+    ) -> Vec<RuntimeWorkspaceData> {
+        let mut workspaces = Vec::with_capacity(workspace_list.len());
+        let active_workspace = self.layout_manager.layout_engine.active_workspace(space);
 
         for (index, (workspace_id, workspace_name)) in workspace_list.iter().enumerate() {
-            let is_active = if let Some(space) = space_id {
-                self.layout_manager.layout_engine.active_workspace(space) == Some(*workspace_id)
-            } else {
-                false
-            };
+            let is_active = active_workspace == Some(*workspace_id);
+            let workspace_windows_ids = self
+                .layout_manager
+                .layout_engine
+                .virtual_workspace_manager()
+                .workspace_windows(&self.state.windows, space, *workspace_id);
 
-            let workspace_windows_ids: Vec<crate::actor::app::WindowId> =
-                if let Some(space) = space_id {
-                    self.layout_manager.layout_engine.virtual_workspace_manager().workspace_windows(
+            let predicted_positions = if !is_active {
+                let screen_info = self
+                    .space_state
+                    .screens
+                    .iter()
+                    .find(|s| s.space == Some(space))
+                    .or_else(|| self.space_state.screens.first());
+
+                if let Some(screen) = screen_info {
+                    let display_uuid = screen.display_uuid_opt();
+                    let gaps = self.config.settings.layout.gaps.effective_for_display(display_uuid);
+                    self.layout_manager.layout_engine.calculate_layout_for_workspace(
                         &self.state.windows,
                         space,
                         *workspace_id,
+                        screen.frame,
+                        &gaps,
+                        self.config.settings.ui.stack_line.thickness(),
+                        self.config.settings.ui.stack_line.horiz_placement,
+                        self.config.settings.ui.stack_line.vert_placement,
                     )
                 } else {
                     Vec::new()
-                };
-
-            let predicted_positions = if !is_active {
-                if let Some(space) = space_id {
-                    let screen_info = self
-                        .space_state
-                        .screens
-                        .iter()
-                        .find(|s| s.space == Some(space))
-                        .cloned()
-                        .or_else(|| self.space_state.screens.first().cloned());
-
-                    if let Some(screen) = screen_info {
-                        let display_uuid = screen.display_uuid_opt();
-                        let gaps =
-                            self.config.settings.layout.gaps.effective_for_display(display_uuid);
-                        self.layout_manager.layout_engine.calculate_layout_for_workspace(
-                            &self.state.windows,
-                            space,
-                            *workspace_id,
-                            screen.frame,
-                            &gaps,
-                            self.config.settings.ui.stack_line.thickness(),
-                            self.config.settings.ui.stack_line.horiz_placement,
-                            self.config.settings.ui.stack_line.vert_placement,
-                        )
-                    } else {
-                        vec![]
-                    }
-                } else {
-                    vec![]
                 }
             } else {
-                vec![]
+                Vec::new()
             };
 
             let predicted_map: std::collections::HashMap<WindowId, CGRect> =
@@ -411,14 +382,12 @@ impl Reactor {
                 })
             });
 
-            let layout_mode = space_id
-                .and_then(|space| {
-                    self.layout_manager
-                        .layout_engine
-                        .virtual_workspace_manager()
-                        .workspace_info(space, *workspace_id)
-                        .map(|ws| ws.layout_mode().to_string())
-                })
+            let layout_mode = self
+                .layout_manager
+                .layout_engine
+                .virtual_workspace_manager()
+                .workspace_info(space, *workspace_id)
+                .map(|ws| ws.layout_mode().to_string())
                 .unwrap_or_else(|| "unknown".to_string());
 
             workspaces.push(RuntimeWorkspaceData {

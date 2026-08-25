@@ -549,6 +549,8 @@ pub struct UiSettings {
     #[serde(default)]
     pub menu_bar: MenuBarSettings,
     #[serde(default)]
+    pub border: BorderSettings,
+    #[serde(default)]
     pub stack_line: StackLineSettings,
     #[serde(default)]
     pub mission_control: MissionControlSettings,
@@ -672,6 +674,54 @@ impl Default for MenuBarSettings {
             display_style: WorkspaceDisplayStyle::default(),
             layout_folder: default_layout_folder(),
         }
+    }
+}
+
+/// Focused-window border rendered by Rift.
+#[derive(Serialize, Deserialize, Debug, PartialEq, Clone, Copy)]
+#[serde(deny_unknown_fields)]
+pub struct BorderSettings {
+    #[serde(default = "no")]
+    pub enabled: bool,
+    #[serde(default = "default_border_width")]
+    pub width: f64,
+    /// Color encoded as ARGB, for example `0xfff37021`.
+    #[serde(default = "default_border_color")]
+    pub color: u32,
+    #[serde(default = "default_border_corner_radius")]
+    pub corner_radius: f64,
+    #[serde(default = "yes")]
+    pub hidpi: bool,
+}
+
+impl Default for BorderSettings {
+    fn default() -> Self {
+        Self {
+            enabled: false,
+            width: default_border_width(),
+            color: default_border_color(),
+            corner_radius: default_border_corner_radius(),
+            hidpi: true,
+        }
+    }
+}
+
+impl BorderSettings {
+    pub fn validate(&self) -> Vec<String> {
+        let mut issues = Vec::new();
+        if !self.width.is_finite() || self.width <= 0.0 {
+            issues.push(format!(
+                "ui.border.width must be finite and positive, got {}",
+                self.width
+            ));
+        }
+        if !self.corner_radius.is_finite() || self.corner_radius < 0.0 {
+            issues.push(format!(
+                "ui.border.corner_radius must be finite and non-negative, got {}",
+                self.corner_radius
+            ));
+        }
+        issues
     }
 }
 
@@ -1100,6 +1150,7 @@ impl Settings {
         }
 
         issues.extend(self.layout.validate());
+        issues.extend(self.ui.border.validate());
 
         if self.gestures.swipe_vertical_tolerance < 0.0 {
             issues.push(format!(
@@ -1378,6 +1429,9 @@ fn default_overscroll_threshold() -> f64 { 0.15 }
 
 fn default_stack_line_spacing() -> f64 { 1.0 }
 fn default_stack_line_thickness() -> f64 { 20.0 }
+fn default_border_width() -> f64 { 4.0 }
+fn default_border_color() -> u32 { 0xfff3_7021 }
+fn default_border_corner_radius() -> f64 { 10.0 }
 
 #[derive(Serialize, Deserialize, Debug, PartialEq, Clone, Copy, Default)]
 #[serde(rename_all = "snake_case")]
@@ -1940,6 +1994,30 @@ mod tests {
             settings.resolved_layout_folder(),
             PathBuf::from("/tmp/rift-layouts")
         );
+    }
+
+    #[test]
+    fn border_settings_default_to_the_local_janky_borders_style() {
+        let settings: BorderSettings = toml::from_str("").unwrap();
+
+        assert_eq!(settings, BorderSettings {
+            enabled: false,
+            width: 4.0,
+            color: 0xfff3_7021,
+            corner_radius: 10.0,
+            hidpi: true,
+        });
+    }
+
+    #[test]
+    fn border_settings_validation_rejects_invalid_geometry() {
+        let settings = BorderSettings {
+            width: 0.0,
+            corner_radius: f64::NAN,
+            ..BorderSettings::default()
+        };
+
+        assert_eq!(settings.validate().len(), 2);
     }
 
     #[test]

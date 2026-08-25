@@ -3,6 +3,7 @@ use tokio::sync::mpsc::{UnboundedReceiver, UnboundedSender, unbounded_channel};
 use tracing::Span;
 
 pub mod app;
+pub mod border;
 pub mod config;
 pub mod config_watcher;
 pub mod drag_swap;

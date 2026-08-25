@@ -310,8 +310,7 @@ impl WindowNotify {
                         }
 
                         let query_started = Instant::now();
-                        let space = window_server::active_space();
-                        let window = window_server::key_focused_window(space);
+                        let focused = window_server::key_focused_window();
                         let query_elapsed = query_started.elapsed();
 
                         // A wake queued during the SPI means this result may already
@@ -324,11 +323,10 @@ impl WindowNotify {
                         trace!(
                             wake_count,
                             ?query_elapsed,
-                            ?space,
-                            ?window,
+                            ?focused,
                             "resolved coalesced WindowServer focus"
                         );
-                        if let Some(window) = window {
+                        if let Some((window, space)) = focused {
                             events_tx.send(Event::WindowServerFocusChanged(window, space));
                         }
                         break;

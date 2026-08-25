@@ -1,3 +1,4 @@
+pub mod border;
 pub mod common;
 pub mod menu_bar;
 pub mod mission_control;

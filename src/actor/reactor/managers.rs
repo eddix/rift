@@ -11,12 +11,14 @@ use crate::actor::reactor::Reactor;
 use crate::actor::reactor::animation::AnimationManager;
 use crate::actor::spaces::ForwardedSpaceState;
 use crate::actor::{
-    event_tap, gesture_tap, menu_bar, raise_manager, stack_line, window_notify, wm_controller,
+    border, event_tap, gesture_tap, menu_bar, raise_manager, stack_line, window_notify,
+    wm_controller,
 };
 use crate::common::collections::{HashMap, HashSet};
 use crate::common::config::{LayoutMode, WindowSnappingSettings};
 use crate::layout_engine::LayoutEngine;
 use crate::model::broadcast::{BroadcastEvent, BroadcastSender, protocol_workspace_id};
+use crate::model::projection::ProjectionHub;
 use crate::sys::screen::SpaceId;
 
 /// Manages application state and rules
@@ -59,7 +61,14 @@ pub struct NotificationManager {
 /// Manages menu state and interactions
 pub struct MenuManager {
     pub menu_state: super::MenuState,
+}
+
+/// Owns the committed desktop snapshot stream and presentation actor endpoints.
+pub struct PresentationManager {
     pub menu_tx: Option<menu_bar::Sender>,
+    pub border_tx: Option<border::Sender>,
+    pub projections: ProjectionHub,
+    pub transaction_depth: usize,
 }
 
 /// Manages Mission Control state
