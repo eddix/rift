@@ -1,13 +1,16 @@
 use std::fmt;
 use std::ptr::{self, NonNull};
 
-use objc2_core_foundation::{CFRetained, CFString, CFType, CGPoint, CGRect, CGSize, Type};
+use objc2_core_foundation::{
+    CFArray, CFNumber, CFRetained, CFString, CFType, CGPoint, CGRect, CGSize, Type,
+};
 use objc2_core_graphics::{CGContext, CGError};
 
 use super::skylight::{
-    CFRelease, CGRegionCreateEmptyRegion, CGRegionCreateWithRects, CGSNewRegionWithRect,
-    CGSNewRegionWithRectList, G_CONNECTION, SLSClearWindowTags, SLSFlushWindowContentRegion,
-    SLSNewWindowWithOpaqueShapeAndContext, SLSOrderWindow, SLSReleaseWindow, SLSSetWindowAlpha,
+    CFRelease, CGRegionCreateEmptyRegion, CGSNewRegionWithRect, CGSNewRegionWithRectList,
+    G_CONNECTION, SLSClearWindowTags, SLSFlushWindowContentRegion, SLSMoveWindow,
+    SLSMoveWindowsToManagedSpace, SLSNewWindow, SLSNewWindowWithOpaqueShapeAndContext,
+    SLSOrderWindow, SLSReleaseWindow, SLSSetMouseEventEnableFlags, SLSSetWindowAlpha,
     SLSSetWindowBackgroundBlurRadiusStyle, SLSSetWindowLevel, SLSSetWindowOpacity,
     SLSSetWindowProperty, SLSSetWindowResolution, SLSSetWindowShape, SLSSetWindowSubLevel,
     SLSSetWindowTags, SLWindowContextCreate, cid_t,
@@ -76,14 +79,6 @@ impl CFRegion {
         Self(unsafe { CFRetained::from_raw(NonNull::new_unchecked(CGRegionCreateEmptyRegion())) })
     }
 
-    fn from_rects(rects: &[CGRect]) -> Result<Self, CGError> {
-        let region = unsafe { CGRegionCreateWithRects(rects.as_ptr(), rects.len()) };
-        let Some(region) = NonNull::new(region) else {
-            return Err(CGError(1000));
-        };
-        Ok(Self(unsafe { CFRetained::from_raw(region) }))
-    }
-
     #[inline]
     pub(super) fn as_ptr(&self) -> *mut CFType { CFRetained::<CFType>::as_ptr(&self.0).as_ptr() }
 }
@@ -106,6 +101,9 @@ pub enum CgsWindowError {
     Tags(CGError),
     Release(CGError),
     Property(CGError),
+    Context(CGError),
+    Flush(CGError),
+    Events(CGError),
 }
 
 impl fmt::Display for CgsWindowError {
@@ -123,6 +121,9 @@ impl fmt::Display for CgsWindowError {
             Tags(e) => write!(f, "CGS window tags error: {:?}", e),
             Release(e) => write!(f, "CGS window release error: {:?}", e),
             Property(e) => write!(f, "CGS window property error: {:?}", e),
+            Context(e) => write!(f, "CGS window context error: {:?}", e),
+            Flush(e) => write!(f, "CGS window flush error: {:?}", e),
+            Events(e) => write!(f, "CGS window event-routing error: {:?}", e),
         }
     }
 }
@@ -210,6 +211,32 @@ impl CgsWindow {
         }
     }
 
+    /// Create a buffered overlay window without an opaque backing shape.
+    pub fn new_overlay(frame: CGRect) -> Result<Self, CgsWindowError> {
+        unsafe {
+            let connection = *G_CONNECTION;
+            let local_frame = CGRect::new(CGPoint::ZERO, frame.size);
+            let region = CFRegion::from_rect(&local_frame).map_err(CgsWindowError::Region)?;
+            let mut wid = 0;
+            cg_ok(SLSNewWindow(
+                connection,
+                2,
+                frame.origin.x as f32,
+                frame.origin.y as f32,
+                region.as_ptr(),
+                &mut wid,
+            ))
+            .map_err(CgsWindowError::Window)?;
+            cg_ok(SLSSetWindowResolution(connection, wid, 1.0))
+                .map_err(CgsWindowError::Resolution)?;
+            Ok(Self {
+                id: wid,
+                connection,
+                owned: true,
+            })
+        }
+    }
+
     #[inline]
     pub fn id(&self) -> WindowId { self.id }
 
@@ -238,6 +265,12 @@ impl CgsWindow {
     pub fn set_opacity(&self, opaque: bool) -> Result<(), CgsWindowError> {
         unsafe { cg_ok(SLSSetWindowOpacity(self.connection, self.id, opaque)) }
             .map_err(CgsWindowError::Alpha)
+    }
+
+    #[inline]
+    pub fn set_mouse_events_enabled(&self, enabled: bool) -> Result<(), CgsWindowError> {
+        unsafe { cg_ok(SLSSetMouseEventEnableFlags(self.connection, self.id, enabled)) }
+            .map_err(CgsWindowError::Events)
     }
 
     #[inline]
@@ -279,23 +312,41 @@ impl CgsWindow {
         }
     }
 
-    /// Set a non-rectangular WindowServer shape from local-coordinate rectangles.
-    pub fn set_shape_regions(
-        &self,
-        origin: CGPoint,
-        rects: &[CGRect],
-    ) -> Result<(), CgsWindowError> {
-        let region = CFRegion::from_rects(rects).map_err(CgsWindowError::Region)?;
+    pub fn move_to(&self, origin: CGPoint) -> Result<(), CgsWindowError> {
+        unsafe { cg_ok(SLSMoveWindow(self.connection, self.id, &origin)) }
+            .map_err(CgsWindowError::Shape)
+    }
+
+    pub fn move_to_space(&self, space: crate::sys::screen::SpaceId) {
+        let number = CFNumber::new_i32(self.id as i32);
+        let windows = CFArray::from_objects(&[&*number]);
         unsafe {
-            cg_ok(SLSSetWindowShape(
+            SLSMoveWindowsToManagedSpace(
+                self.connection,
+                CFRetained::as_ptr(&windows).as_ptr(),
+                space.get(),
+            )
+        };
+    }
+
+    pub fn create_context(&self) -> Result<CFRetained<CGContext>, CgsWindowError> {
+        let context =
+            unsafe { SLWindowContextCreate(self.connection, self.id, ptr::null_mut::<CFType>()) };
+        let Some(context) = NonNull::new(context) else {
+            return Err(CgsWindowError::Context(CGError(1000)));
+        };
+        Ok(unsafe { CFRetained::from_raw(context) })
+    }
+
+    pub fn flush_content(&self) -> Result<(), CgsWindowError> {
+        unsafe {
+            cg_ok(SLSFlushWindowContentRegion(
                 self.connection,
                 self.id,
-                origin.x as f32,
-                origin.y as f32,
-                region.as_ptr(),
+                ptr::null_mut(),
             ))
         }
-        .map_err(CgsWindowError::Shape)
+        .map_err(CgsWindowError::Flush)
     }
 
     #[inline]
@@ -419,6 +470,9 @@ impl Drop for CgsWindow {
             return;
         }
         unsafe {
+            if let Err(err) = cg_ok(SLSOrderWindow(self.connection, self.id, 0, 0)) {
+                tracing::warn!(error=?err, id=self.id, "failed to order out CGS window before release");
+            }
             if let Err(err) = cg_ok(SLSReleaseWindow(self.connection, self.id)) {
                 tracing::warn!(error=?err, id=self.id, "failed to release CGS window");
             }
