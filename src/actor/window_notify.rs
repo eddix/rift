@@ -5,7 +5,7 @@ use std::time::{Duration, Instant};
 use tracing::{debug, trace};
 
 use super::reactor::{self, Event};
-use super::spaces;
+use super::{border, spaces};
 use crate::actor::app::WindowId;
 use crate::actor::reactor::Requested;
 use crate::common::collections::{HashMap, HashSet};
@@ -80,6 +80,17 @@ pub type Receiver = crate::actor::Receiver<Request>;
 
 const FOCUS_WAKE_DEBOUNCE: Duration = Duration::from_millis(1);
 
+fn is_border_order_event(event: CGSEventType) -> bool {
+    matches!(
+        event,
+        CGSEventType::Known(KnownCGSEvent::WindowReordered)
+            | CGSEventType::Known(KnownCGSEvent::WindowLevelChanged)
+            | CGSEventType::Known(KnownCGSEvent::WindowManagerActivatingClickOrdering)
+            | CGSEventType::Known(KnownCGSEvent::WindowOrderingGroupChanged)
+            | CGSEventType::Known(KnownCGSEvent::WindowParentChanged)
+    )
+}
+
 #[derive(Clone)]
 struct FocusWakeSender {
     wake: mpsc::SyncSender<()>,
@@ -97,6 +108,7 @@ pub struct WindowNotify {
     initial_events: Vec<CGSEventType>,
     tx_store: Option<WindowTxStore>,
     focus_wake: FocusWakeSender,
+    border_tx: border::Sender,
 }
 
 impl WindowNotify {
@@ -106,6 +118,7 @@ impl WindowNotify {
         requests_rx: Receiver,
         initial_events: &[CGSEventType],
         tx_store: Option<WindowTxStore>,
+        border_tx: border::Sender,
     ) -> Self {
         let (focus_wake_tx, focus_wake_rx) = mpsc::sync_channel(1);
         Self::spawn_focus_resolver(events_tx.clone(), focus_wake_rx);
@@ -117,6 +130,7 @@ impl WindowNotify {
             initial_events: initial_events.iter().copied().collect(),
             tx_store,
             focus_wake: FocusWakeSender { wake: focus_wake_tx },
+            border_tx,
         }
     }
 
@@ -132,6 +146,7 @@ impl WindowNotify {
                 self.spaces_tx.clone(),
                 self.tx_store.clone(),
                 self.focus_wake.clone(),
+                self.border_tx.clone(),
             ) {
                 Ok(()) => {
                     self.subscribed.insert(event);
@@ -168,6 +183,7 @@ impl WindowNotify {
                     self.spaces_tx.clone(),
                     self.tx_store.clone(),
                     self.focus_wake.clone(),
+                    self.border_tx.clone(),
                 ) {
                     Ok(()) => {
                         self.subscribed.insert(event);
@@ -192,6 +208,7 @@ impl WindowNotify {
         spaces_tx: spaces::Sender,
         tx_store: Option<WindowTxStore>,
         focus_wake: FocusWakeSender,
+        border_tx: border::Sender,
     ) -> Result<(), i32> {
         let res = window_notify::init(event);
         if res != 0 {
@@ -256,12 +273,25 @@ impl WindowNotify {
                         ));
                     }
                     CGSEventType::Known(KnownCGSEvent::WindowReordered)
+                    | CGSEventType::Known(KnownCGSEvent::WindowLevelChanged)
+                    | CGSEventType::Known(KnownCGSEvent::WindowManagerActivatingClickOrdering)
+                    | CGSEventType::Known(KnownCGSEvent::WindowOrderingGroupChanged)
+                    | CGSEventType::Known(KnownCGSEvent::WindowParentChanged)
                     | CGSEventType::Known(
                         KnownCGSEvent::WindowManagerSpaceFrontConnectionChanged,
                     )
                     | CGSEventType::Known(
                         KnownCGSEvent::WindowManagerGlobalFrontConnectionChanged,
-                    ) => focus_wake.notify(),
+                    ) => {
+                        focus_wake.notify();
+                        if is_border_order_event(event)
+                            && let Some(window_id) = evt.window_id
+                        {
+                            border_tx.send(border::Event::OrderInvalidated(WindowServerId::new(
+                                window_id,
+                            )));
+                        }
+                    }
                     CGSEventType::Known(
                         KnownCGSEvent::WindowHidden | KnownCGSEvent::WindowUnhidden,
                     ) => {
@@ -361,7 +391,8 @@ impl WindowNotify {
 
 #[cfg(test)]
 mod tests {
-    use super::FocusWakeSender;
+    use super::{FocusWakeSender, is_border_order_event};
+    use crate::sys::skylight::{CGSEventType, KnownCGSEvent};
 
     #[test]
     fn focus_wakes_coalesce_to_one_signal() {
@@ -373,5 +404,21 @@ mod tests {
         sender.notify();
 
         assert_eq!(rx.try_iter().count(), 1);
+    }
+
+    #[test]
+    fn activating_click_and_order_group_events_resync_the_border() {
+        for event in [
+            KnownCGSEvent::WindowReordered,
+            KnownCGSEvent::WindowLevelChanged,
+            KnownCGSEvent::WindowManagerActivatingClickOrdering,
+            KnownCGSEvent::WindowOrderingGroupChanged,
+            KnownCGSEvent::WindowParentChanged,
+        ] {
+            assert!(is_border_order_event(CGSEventType::Known(event)));
+        }
+        assert!(!is_border_order_event(CGSEventType::Known(
+            KnownCGSEvent::WindowMoved,
+        )));
     }
 }

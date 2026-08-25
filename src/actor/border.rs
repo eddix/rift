@@ -6,11 +6,13 @@ use tracing::warn;
 use crate::actor;
 use crate::common::config::{BorderSettings, Config};
 use crate::model::projection::{DesktopSnapshot, StateRevision};
+use crate::sys::window_server::WindowServerId;
 use crate::ui::border::{BorderStyle, FocusBorderWindow};
 
 pub enum Event {
     Snapshot(Arc<DesktopSnapshot>),
     ConfigUpdated(Config),
+    OrderInvalidated(WindowServerId),
 }
 
 pub struct Border {
@@ -43,6 +45,7 @@ impl Border {
             match event {
                 Event::Snapshot(snapshot) => self.handle_snapshot(snapshot),
                 Event::ConfigUpdated(config) => self.handle_config_updated(config),
+                Event::OrderInvalidated(window) => self.handle_order_invalidated(window),
             }
         }
     }
@@ -59,6 +62,23 @@ impl Border {
     fn handle_config_updated(&mut self, config: Config) {
         self.settings = config.settings.ui.border;
         self.sync_surface();
+    }
+
+    fn handle_order_invalidated(&mut self, window: WindowServerId) {
+        let targets_window = self
+            .last_snapshot
+            .as_ref()
+            .and_then(|snapshot| snapshot.state.border_target)
+            .is_some_and(|target| target.window_server_id == window);
+        if !targets_window {
+            return;
+        }
+        if let Some(surface) = &self.surface
+            && let Err(error) = surface.sync_order()
+        {
+            warn!(?error, "failed to restore focused-window border ordering");
+            self.surface = None;
+        }
     }
 
     fn sync_surface(&mut self) {
