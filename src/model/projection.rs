@@ -46,6 +46,7 @@ pub struct DisplayWorkspaceContext {
 pub struct BorderTarget {
     pub window: WindowId,
     pub window_server_id: WindowServerId,
+    pub space: SpaceId,
     pub frame: CGRect,
 }
 
