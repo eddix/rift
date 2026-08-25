@@ -1,3 +1,4 @@
+pub mod border;
 pub mod common;
 pub mod drag_preview;
 pub mod menu_bar;

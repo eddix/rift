@@ -13,7 +13,7 @@ use crate::sys::window_server::WindowServerId;
 /// Runtime-only workspace projection. Its windows retain the macOS
 /// accessibility metadata needed by the UI; IPC uses the protocol-owned
 /// `rift_protocol::WorkspaceData` representation.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct RuntimeWorkspaceData {
     pub workspace_id: crate::model::VirtualWorkspaceId,
     pub space: SpaceId,
@@ -26,7 +26,7 @@ pub struct RuntimeWorkspaceData {
     pub windows: Vec<RuntimeWindowData>,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct RuntimeWindowData {
     /// Unparked layout geometry for presentation; info.frame keeps its existing native semantics.
     pub layout_frame: Option<objc2_core_foundation::CGRect>,
@@ -38,7 +38,7 @@ pub struct RuntimeWindowData {
     pub info: WindowInfo,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct RuntimeDisplayData {
     pub info: ScreenInfo,
     /// True if this display's space is active per the activation policy.
