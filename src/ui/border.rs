@@ -53,6 +53,7 @@ impl FocusBorderWindow {
         cgs_window.set_alpha(1.0)?;
         cgs_window.set_level(NSNormalWindowLevel as i32)?;
         cgs_window.set_tags(1 << 3)?;
+        set_ring_shape(&cgs_window, frame, style.width)?;
 
         let window = Self {
             target: target.window_server_id,
@@ -75,9 +76,12 @@ impl FocusBorderWindow {
         let size_changed = self.frame.size != next_frame.size;
         let frame_changed = self.frame != next_frame;
         let style_changed = self.style != style;
+        let shape_changed = frame_changed || self.style.width != style.width;
 
+        if shape_changed {
+            set_ring_shape(&self.cgs_window, next_frame, style.width)?;
+        }
         if frame_changed {
-            self.cgs_window.set_shape(next_frame)?;
             self.frame = next_frame;
         }
         if style_changed {
@@ -128,6 +132,33 @@ fn surface_frame(target: CGRect, width: f64) -> CGRect {
     )
 }
 
+fn set_ring_shape(window: &CgsWindow, frame: CGRect, width: f64) -> Result<(), CgsWindowError> {
+    let regions = ring_regions(frame.size, width);
+    window.set_shape_regions(frame.origin, &regions)
+}
+
+fn ring_regions(size: CGSize, width: f64) -> Vec<CGRect> {
+    let width = width.max(0.0).min(size.width / 2.0).min(size.height / 2.0);
+    let inner_height = (size.height - width * 2.0).max(0.0);
+    let mut regions = Vec::with_capacity(4);
+    regions.push(CGRect::new(CGPoint::ZERO, CGSize::new(size.width, width)));
+    regions.push(CGRect::new(
+        CGPoint::new(0.0, size.height - width),
+        CGSize::new(size.width, width),
+    ));
+    if inner_height > 0.0 {
+        regions.push(CGRect::new(
+            CGPoint::new(0.0, width),
+            CGSize::new(width, inner_height),
+        ));
+        regions.push(CGRect::new(
+            CGPoint::new(size.width - width, width),
+            CGSize::new(width, inner_height),
+        ));
+    }
+    regions
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -150,5 +181,20 @@ mod tests {
             (red * 255.0, green * 255.0, blue * 255.0, alpha),
             (243.0, 112.0, 33.0, 1.0)
         );
+    }
+
+    #[test]
+    fn ring_regions_should_not_include_the_window_center() {
+        let size = CGSize::new(808.0, 608.0);
+        let regions = ring_regions(size, 4.0);
+        let center = CGPoint::new(size.width / 2.0, size.height / 2.0);
+
+        assert_eq!(regions.len(), 4);
+        assert!(!regions.iter().any(|region| {
+            center.x >= region.origin.x
+                && center.x < region.origin.x + region.size.width
+                && center.y >= region.origin.y
+                && center.y < region.origin.y + region.size.height
+        }));
     }
 }

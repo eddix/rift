@@ -543,6 +543,7 @@ unsafe extern "C" {
         region: *mut *mut CFType,
     ) -> CGError;
     pub fn CGRegionCreateEmptyRegion() -> *mut CFType;
+    pub fn CGRegionCreateWithRects(rects: *const CGRect, count: usize) -> *mut CFType;
     pub fn SLWindowContextCreate(cid: cid_t, wid: u32, options: *mut CFType) -> *mut CGContext;
 
     pub fn SLSAddSurface(cid: cid_t, wid: u32, out_sid: *mut u32) -> CGError;

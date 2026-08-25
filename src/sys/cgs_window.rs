@@ -5,8 +5,8 @@ use objc2_core_foundation::{CFRetained, CFString, CFType, CGPoint, CGRect, CGSiz
 use objc2_core_graphics::{CGContext, CGError};
 
 use super::skylight::{
-    CFRelease, CGRegionCreateEmptyRegion, CGSNewRegionWithRect, CGSNewRegionWithRectList,
-    G_CONNECTION, SLSClearWindowTags, SLSFlushWindowContentRegion,
+    CFRelease, CGRegionCreateEmptyRegion, CGRegionCreateWithRects, CGSNewRegionWithRect,
+    CGSNewRegionWithRectList, G_CONNECTION, SLSClearWindowTags, SLSFlushWindowContentRegion,
     SLSNewWindowWithOpaqueShapeAndContext, SLSOrderWindow, SLSReleaseWindow, SLSSetWindowAlpha,
     SLSSetWindowBackgroundBlurRadiusStyle, SLSSetWindowLevel, SLSSetWindowOpacity,
     SLSSetWindowProperty, SLSSetWindowResolution, SLSSetWindowShape, SLSSetWindowSubLevel,
@@ -74,6 +74,14 @@ impl CFRegion {
 
     fn empty() -> Self {
         Self(unsafe { CFRetained::from_raw(NonNull::new_unchecked(CGRegionCreateEmptyRegion())) })
+    }
+
+    fn from_rects(rects: &[CGRect]) -> Result<Self, CGError> {
+        let region = unsafe { CGRegionCreateWithRects(rects.as_ptr(), rects.len()) };
+        let Some(region) = NonNull::new(region) else {
+            return Err(CGError(1000));
+        };
+        Ok(Self(unsafe { CFRetained::from_raw(region) }))
     }
 
     #[inline]
@@ -269,6 +277,25 @@ impl CgsWindow {
             drop(region);
             result
         }
+    }
+
+    /// Set a non-rectangular WindowServer shape from local-coordinate rectangles.
+    pub fn set_shape_regions(
+        &self,
+        origin: CGPoint,
+        rects: &[CGRect],
+    ) -> Result<(), CgsWindowError> {
+        let region = CFRegion::from_rects(rects).map_err(CgsWindowError::Region)?;
+        unsafe {
+            cg_ok(SLSSetWindowShape(
+                self.connection,
+                self.id,
+                origin.x as f32,
+                origin.y as f32,
+                region.as_ptr(),
+            ))
+        }
+        .map_err(CgsWindowError::Shape)
     }
 
     #[inline]
