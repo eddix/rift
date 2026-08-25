@@ -36,6 +36,11 @@ context renderer clears in logical-point coordinates. HiDPI changes only the
 the CGContext clear/render transform can leave uninitialized opaque pixels over
 the target window.
 
+The border's WindowServer shape is a union of four edge rectangles, not a full
+window-sized rectangle with a transparent center. Consequently the target's
+content area is absent from the overlay geometry and cannot become an opaque
+cover during WindowServer surface recreation.
+
 The remaining migration is deliberately incremental:
 
 1. Derive StackLine state from `DesktopSnapshot`.
