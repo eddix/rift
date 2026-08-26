@@ -1933,6 +1933,11 @@ impl Reactor {
                     crate::actor::wm_controller::WmCmd::ToggleCommandPalette,
                 );
             }
+            Event::Command(Command::Reactor(ReactorCommand::ToggleCommandPaletteCommands)) => {
+                return command_workflow::handle_wm_command(
+                    crate::actor::wm_controller::WmCmd::ToggleCommandPaletteCommands,
+                );
+            }
             Event::Command(Command::Reactor(ReactorCommand::CloseWindow { window_server_id })) => {
                 return command_workflow::handle_close_window(
                     window_server_id.map(WindowServerId::new),

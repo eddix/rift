@@ -418,7 +418,7 @@ comb1 = "Alt + Shift"
 # Commands
 # - toggle_space_activated
 # - reload_config
-# - toggle_command_palette
+# - toggle_command_palette / toggle_command_palette_commands
 # - next_workspace / prev_workspace
 # - next_workspace = true|false (optional skip-empty override)
 # - prev_workspace = true|false (optional skip-empty override)
@@ -440,6 +440,7 @@ comb1 = "Alt + Shift"
 
 # Example: use Option+P on macOS (Alt in Rift config means Option)
 # "Alt + P" = "toggle_command_palette"
+# "Alt + Shift + P" = "toggle_command_palette_commands"
 # - toggle_focus_floating / toggle_window_floating / toggle_fullscreen / toggle_fullscreen_within_gaps
 # - toggle_focus_unmanaged / cycle_unmanaged_windows
 # - resize_window_grow / resize_window_shrink (without param, horizontal is default)

@@ -110,6 +110,7 @@ pub enum ReactorCommand {
     ShowMissionControlCurrent,
     DismissMissionControl,
     ToggleCommandPalette,
+    ToggleCommandPaletteCommands,
     MoveMouseToDisplay(DisplaySelector),
     FocusDisplay(DisplaySelector),
     CloseWindow {

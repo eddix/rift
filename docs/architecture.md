@@ -67,7 +67,7 @@ the in-memory MRU while the panel is hidden; there is no polling or persisted
 history.
 
 The pure model owns the complete ranked result set, fuzzy matching, stable
-selection identity, and application drill-down. The main-thread UI owns only a
+selection identity, explicit window/command scopes, and application drill-down. The main-thread UI owns only a
 prewarmed borderless `NSPanel`, native AppKit input/scrolling, and rendering
 state. `max_results` controls the visible viewport rather than truncating model
 data; keyboard selection scrolls into view and drawing is limited to dirty rows.

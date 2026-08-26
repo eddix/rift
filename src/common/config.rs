@@ -2034,13 +2034,17 @@ mod tests {
             r#"
             [keys]
             palette = "toggle_command_palette"
+            commands = "toggle_command_palette_commands"
             "#,
         )
         .unwrap();
 
         assert_eq!(
-            config.keys["palette"],
-            WmCommand::Wm(WmCmd::ToggleCommandPalette)
+            (&config.keys["palette"], &config.keys["commands"]),
+            (
+                &WmCommand::Wm(WmCmd::ToggleCommandPalette),
+                &WmCommand::Wm(WmCmd::ToggleCommandPaletteCommands),
+            )
         );
     }
 
