@@ -16,16 +16,19 @@ use super::wm_controller::{self, WmCmd, WmCommand, WmEvent};
 use crate::actor;
 use crate::common::config::{CommandPaletteSettings, Config};
 use crate::model::command_palette::{
-    PaletteAction, PaletteFocusOrigin, PaletteModel, PaletteMru, PaletteSnapshot,
+    PaletteAction, PaletteFocusOrigin, PaletteMode, PaletteModel, PaletteMru, PaletteSnapshot,
 };
 use crate::model::projection::DesktopSnapshot;
 use crate::sys::app::NSRunningApplicationExt;
 use crate::sys::dispatch::DispatchExt;
-use crate::ui::command_palette::{CommandPalettePanel, PaletteInput, PaletteRenderRow};
+use crate::ui::command_palette::{
+    CommandPalettePanel, PaletteInput, PalettePanelMode, PaletteRenderRow,
+};
 
 #[derive(Debug)]
 pub enum Event {
     Toggle,
+    ToggleCommands,
     Input(PaletteInput),
     ConfigUpdated(Box<Config>),
     DesktopSnapshot(Arc<DesktopSnapshot>),
@@ -42,10 +45,12 @@ enum Session {
     Hidden,
     Opening {
         generation: u64,
+        mode: PaletteMode,
     },
     Visible {
         generation: u64,
         origin: Option<PaletteFocusOrigin>,
+        mode: PaletteMode,
     },
 }
 
@@ -53,7 +58,10 @@ impl Session {
     fn accepts_snapshot(self, generation: u64) -> bool {
         matches!(
             self,
-            Session::Opening { generation: current }
+            Session::Opening {
+                generation: current,
+                ..
+            }
                 | Session::Visible {
                     generation: current,
                     ..
@@ -116,13 +124,8 @@ impl CommandPalette {
 
     fn handle_event(&mut self, event: Event) {
         match event {
-            Event::Toggle => {
-                if !matches!(self.session, Session::Hidden) {
-                    self.cancel();
-                } else {
-                    self.show();
-                }
-            }
+            Event::Toggle => self.toggle(PaletteMode::Windows),
+            Event::ToggleCommands => self.toggle(PaletteMode::Commands),
             Event::Input(input) => self.handle_input(input),
             Event::ConfigUpdated(config) => self.update_config(*config),
             Event::DesktopSnapshot(snapshot) => self.handle_desktop_snapshot(snapshot),
@@ -147,14 +150,25 @@ impl CommandPalette {
         ));
     }
 
-    fn show(&mut self) {
+    fn toggle(&mut self, mode: PaletteMode) {
+        if matches!(self.session, Session::Hidden) {
+            self.show(mode);
+        } else {
+            self.cancel();
+        }
+    }
+
+    fn show(&mut self, mode: PaletteMode) {
         if !self.settings.enabled {
             return;
         }
         let started = Instant::now();
         self.ensure_panel();
         self.generation = self.generation.wrapping_add(1);
-        self.session = Session::Opening { generation: self.generation };
+        self.session = Session::Opening {
+            generation: self.generation,
+            mode,
+        };
         self.reactor
             .send(reactor::Event::CommandPaletteSnapshotRequested { generation: self.generation });
         debug!(
@@ -294,13 +308,17 @@ impl CommandPalette {
         }
         match self.session {
             Session::Hidden => {}
-            Session::Opening { .. } => {
+            Session::Opening { mode, .. } => {
                 let origin = snapshot.focus_origin;
-                self.model.begin_session(snapshot, &self.mru);
-                self.session = Session::Visible { generation, origin };
+                self.model.begin_session(snapshot, &self.mru, mode);
+                self.session = Session::Visible { generation, origin, mode };
                 self.render();
                 if let Some(panel) = self.panel.as_ref()
-                    && !panel.show(self.model.target_display_id(), self.model.query())
+                    && !panel.show(
+                        self.model.target_display_id(),
+                        self.model.query(),
+                        panel_mode(mode),
+                    )
                 {
                     warn!("command palette failed to become key window");
                 }
@@ -382,6 +400,13 @@ impl CommandPalette {
     }
 }
 
+fn panel_mode(mode: PaletteMode) -> PalettePanelMode {
+    match mode {
+        PaletteMode::Windows => PalettePanelMode::Windows,
+        PaletteMode::Commands => PalettePanelMode::Commands,
+    }
+}
+
 fn focus_origin_action(origin: PaletteFocusOrigin) -> PaletteAction {
     if let Some(window_id) = origin.window_id {
         PaletteAction::FocusWindow {
@@ -429,6 +454,17 @@ mod tests {
 
     #[test]
     fn session_should_reject_stale_snapshot_generation() {
-        assert!(!Session::Opening { generation: 9 }.accepts_snapshot(8));
+        assert!(
+            !Session::Opening {
+                generation: 9,
+                mode: PaletteMode::Commands,
+            }
+            .accepts_snapshot(8)
+        );
+    }
+
+    #[test]
+    fn command_mode_should_map_to_the_commands_panel_header() {
+        assert_eq!(panel_mode(PaletteMode::Commands), PalettePanelMode::Commands);
     }
 }

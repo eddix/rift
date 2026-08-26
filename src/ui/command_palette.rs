@@ -14,13 +14,16 @@ use objc2_app_kit::{
     NSRunningApplication, NSScreen, NSScrollView, NSStringDrawing, NSStringDrawingOptions,
     NSStringNSExtendedStringDrawing, NSTextField, NSTextFieldDelegate, NSTextView, NSView,
     NSVisualEffectBlendingMode, NSVisualEffectMaterial, NSVisualEffectState, NSVisualEffectView,
-    NSWindowCollectionBehavior, NSWindowDelegate, NSWindowStyleMask,
+    NSWindowCollectionBehavior, NSWindowDelegate, NSWindowStyleMask, NSWorkspace,
 };
 use objc2_core_foundation::{CGPoint, CGRect, CGSize};
-use objc2_core_graphics::CGContext;
+use objc2_core_graphics::{CGColorSpace, CGContext, CGGradient, CGGradientDrawingOptions};
 use objc2_foundation::{
     MainThreadMarker, NSAttributedStringKey, NSDictionary, NSMutableDictionary, NSNotification,
-    NSObject, NSObjectProtocol, NSString,
+    NSNumber, NSObject, NSObjectProtocol, NSString,
+};
+use objc2_quartz_core::{
+    CABasicAnimation, CAMediaTiming, CAMediaTimingFunction, kCAMediaTimingFunctionEaseInEaseOut,
 };
 
 use crate::model::command_palette::PaletteEntryKind;
@@ -39,6 +42,16 @@ const TOP_PADDING: f64 = 11.0;
 const ICON_SIZE: f64 = 27.0;
 const MIN_TITLE_WIDTH: f64 = 72.0;
 const ACCENT_COLOR: (f64, f64, f64, f64) = (0.18, 0.68, 0.92, 0.92);
+const GLOW_COLOR: (f64, f64, f64) = (0.18, 0.68, 0.92);
+const GLOW_CENTER_ALPHA: f64 = 0.3;
+const GLOW_MIDDLE_ALPHA: f64 = 0.1;
+const GLOW_MIN_OPACITY: f32 = 0.66;
+const GLOW_MAX_OPACITY: f32 = 0.92;
+const GLOW_STATIC_OPACITY: f32 = 0.79;
+const GLOW_HALF_CYCLE_SECONDS: f64 = 3.4;
+const GLOW_ANIMATION_KEY: &str = "rift.command-palette.ambient-glow";
+const GLOW_HORIZONTAL_POSITION: f64 = 0.618_033_988_75;
+const PANEL_TINT_ALPHA: f64 = 0.72;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum PaletteInput {
@@ -49,6 +62,28 @@ pub enum PaletteInput {
     LeaveApplication,
     Cancel,
     ClickResult(usize),
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PalettePanelMode {
+    Windows,
+    Commands,
+}
+
+impl PalettePanelMode {
+    fn brand_label(self) -> &'static str {
+        match self {
+            Self::Windows => "RIFT /",
+            Self::Commands => "RIFT / COMMANDS",
+        }
+    }
+
+    fn brand_width(self) -> f64 {
+        match self {
+            Self::Windows => 42.0,
+            Self::Commands => 108.0,
+        }
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -122,6 +157,26 @@ define_class!(
 );
 
 impl PaletteScrollView {
+    fn new(mtm: MainThreadMarker, frame: CGRect) -> Retained<Self> {
+        unsafe { msg_send![mtm.alloc::<Self>(), initWithFrame: frame] }
+    }
+}
+
+define_class!(
+    #[unsafe(super(NSView))]
+    #[thread_kind = MainThreadOnly]
+    #[name = "RiftPaletteAmbientGlowView"]
+    struct PaletteAmbientGlowView;
+
+    impl PaletteAmbientGlowView {
+        #[unsafe(method(drawRect:))]
+        fn draw_rect(&self, _dirty_rect: CGRect) {
+            draw_ambient_glow(self.bounds());
+        }
+    }
+);
+
+impl PaletteAmbientGlowView {
     fn new(mtm: MainThreadMarker, frame: CGRect) -> Retained<Self> {
         unsafe { msg_send![mtm.alloc::<Self>(), initWithFrame: frame] }
     }
@@ -442,7 +497,10 @@ impl PaletteResultsView {
 
 pub struct CommandPalettePanel {
     panel: Retained<PalettePanel>,
-    content: Retained<NSVisualEffectView>,
+    content: Retained<NSView>,
+    backdrop: Retained<NSVisualEffectView>,
+    surface: Retained<NSView>,
+    ambient_glow: Retained<PaletteAmbientGlowView>,
     brand_label: Retained<NSTextField>,
     search_field: Retained<PaletteSearchField>,
     scroll_view: Retained<PaletteScrollView>,
@@ -453,6 +511,7 @@ pub struct CommandPalettePanel {
     width: f64,
     max_visible_rows: usize,
     height: Cell<f64>,
+    mode: Cell<PalettePanelMode>,
     mtm: MainThreadMarker,
 }
 
@@ -464,6 +523,7 @@ impl CommandPalettePanel {
         callback: InputHandler,
     ) -> Self {
         let max_visible_rows = visible_rows.max(1);
+        let mode = PalettePanelMode::Windows;
         let height = panel_height(max_visible_rows);
         let results_frame = results_viewport_frame(width, max_visible_rows);
         let search_y = search_field_y(max_visible_rows);
@@ -491,11 +551,7 @@ impl CommandPalettePanel {
                 | NSWindowCollectionBehavior::FullScreenAuxiliary,
         );
 
-        let content = NSVisualEffectView::initWithFrame(mtm.alloc(), frame);
-        content.setMaterial(NSVisualEffectMaterial::HUDWindow);
-        content.setBlendingMode(NSVisualEffectBlendingMode::WithinWindow);
-        content.setState(NSVisualEffectState::Active);
-        content.setEmphasized(false);
+        let content = NSView::initWithFrame(mtm.alloc(), frame);
         content.setWantsLayer(true);
         if let Some(layer) = content.layer() {
             layer.setCornerRadius(18.0);
@@ -503,15 +559,33 @@ impl CommandPalettePanel {
             layer.setBorderWidth(0.5);
             let border = NSColor::colorWithWhite_alpha(1.0, 0.12).CGColor();
             layer.setBorderColor(Some(border.as_ref()));
+        }
+
+        let backdrop = NSVisualEffectView::initWithFrame(mtm.alloc(), frame);
+        backdrop.setMaterial(NSVisualEffectMaterial::HUDWindow);
+        backdrop.setBlendingMode(NSVisualEffectBlendingMode::BehindWindow);
+        backdrop.setState(NSVisualEffectState::Active);
+        backdrop.setEmphasized(false);
+
+        let surface = NSView::initWithFrame(mtm.alloc(), frame);
+        surface.setWantsLayer(true);
+        if let Some(layer) = surface.layer() {
             layer.setBackgroundColor(Some(
-                NSColor::colorWithSRGBRed_green_blue_alpha(0.035, 0.05, 0.068, 0.94)
+                NSColor::colorWithSRGBRed_green_blue_alpha(0.035, 0.05, 0.068, PANEL_TINT_ALPHA)
                     .CGColor()
                     .as_ref(),
             ));
         }
 
-        let brand_label = NSTextField::labelWithString(&NSString::from_str("RIFT /"), mtm);
-        brand_label.setFrame(header_brand_frame(search_y));
+        let ambient_glow = PaletteAmbientGlowView::new(mtm, frame);
+        ambient_glow.setWantsLayer(true);
+        if let Some(layer) = ambient_glow.layer() {
+            layer.setOpacity(GLOW_STATIC_OPACITY);
+        }
+
+        let brand_label =
+            NSTextField::labelWithString(&NSString::from_str(mode.brand_label()), mtm);
+        brand_label.setFrame(header_brand_frame(search_y, mode));
         brand_label.setFont(Some(
             NSFont::systemFontOfSize_weight(10.5, unsafe { NSFontWeightMedium }).as_ref(),
         ));
@@ -525,7 +599,7 @@ impl CommandPalettePanel {
             .as_ref(),
         ));
 
-        let search_frame = header_search_frame(width, search_y);
+        let search_frame = header_search_frame(width, search_y, mode);
         let search_field = PaletteSearchField::new(mtm, search_frame, callback.clone());
         search_field
             .setPlaceholderString(Some(&NSString::from_str("Search windows, apps, and commands")));
@@ -561,6 +635,9 @@ impl CommandPalettePanel {
         ));
         result_count.setTextColor(Some(NSColor::colorWithWhite_alpha(0.48, 1.0).as_ref()));
 
+        content.addSubview(&backdrop);
+        content.addSubview(&surface);
+        content.addSubview(&ambient_glow);
         content.addSubview(&brand_label);
         content.addSubview(&search_field);
         content.addSubview(&scroll_view);
@@ -579,6 +656,9 @@ impl CommandPalettePanel {
         Self {
             panel,
             content,
+            backdrop,
+            surface,
+            ambient_glow,
             brand_label,
             search_field,
             scroll_view,
@@ -589,12 +669,15 @@ impl CommandPalettePanel {
             width,
             max_visible_rows,
             height: Cell::new(height),
+            mode: Cell::new(mode),
             mtm,
         }
     }
 
-    pub fn show(&self, display_id: Option<u32>, query: &str) -> bool {
+    pub fn show(&self, display_id: Option<u32>, query: &str, mode: PalettePanelMode) -> bool {
+        self.set_mode(mode);
         self.set_query(query);
+        self.start_ambient_glow();
         let screen = display_id
             .and_then(|display_id| {
                 NSScreen::screens(self.mtm).into_iter().find(|screen| {
@@ -626,7 +709,10 @@ impl CommandPalettePanel {
         self.panel.isKeyWindow() && responder_ready
     }
 
-    pub fn hide(&self) { self.panel.orderOut(None); }
+    pub fn hide(&self) {
+        self.stop_ambient_glow();
+        self.panel.orderOut(None);
+    }
 
     pub fn set_query(&self, query: &str) {
         self.search_field.setStringValue(&NSString::from_str(query));
@@ -655,15 +741,66 @@ impl CommandPalettePanel {
         let frame = CGRect::new(origin, CGSize::new(self.width, height));
         self.panel.setFrame_display(frame, false);
         self.content.setFrame(CGRect::new(CGPoint::ZERO, frame.size));
+        self.backdrop.setFrame(CGRect::new(CGPoint::ZERO, frame.size));
+        self.surface.setFrame(CGRect::new(CGPoint::ZERO, frame.size));
+        self.ambient_glow.setFrame(CGRect::new(CGPoint::ZERO, frame.size));
+        self.ambient_glow.setNeedsDisplay(true);
 
         let search_y = search_field_y(visible_rows);
-        self.brand_label.setFrame(header_brand_frame(search_y));
-        self.search_field.setFrame(header_search_frame(self.width, search_y));
+        let mode = self.mode.get();
+        self.brand_label.setFrame(header_brand_frame(search_y, mode));
+        self.search_field.setFrame(header_search_frame(self.width, search_y, mode));
         self.result_count.setFrame(header_count_frame(self.width, search_y));
 
         let results_frame = results_viewport_frame(self.width, visible_rows);
         self.scroll_view.setFrame(results_frame);
         self.results_view.set_viewport_size(results_frame.size);
+    }
+
+    fn set_mode(&self, mode: PalettePanelMode) {
+        self.mode.set(mode);
+        self.brand_label.setStringValue(&NSString::from_str(mode.brand_label()));
+        let search_y = self.search_field.frame().origin.y;
+        self.brand_label.setFrame(header_brand_frame(search_y, mode));
+        self.search_field.setFrame(header_search_frame(self.width, search_y, mode));
+    }
+
+    fn start_ambient_glow(&self) {
+        let Some(layer) = self.ambient_glow.layer() else {
+            return;
+        };
+        layer.removeAnimationForKey(&NSString::from_str(GLOW_ANIMATION_KEY));
+        if NSWorkspace::sharedWorkspace().accessibilityDisplayShouldReduceMotion() {
+            layer.setOpacity(GLOW_STATIC_OPACITY);
+            return;
+        }
+
+        let animation =
+            CABasicAnimation::animationWithKeyPath(Some(&NSString::from_str("opacity")));
+        let from = NSNumber::numberWithFloat(GLOW_MIN_OPACITY);
+        let to = NSNumber::numberWithFloat(GLOW_MAX_OPACITY);
+        let from: &AnyObject = from.as_ref();
+        let to: &AnyObject = to.as_ref();
+        unsafe {
+            animation.setFromValue(Some(from));
+            animation.setToValue(Some(to));
+        }
+        animation.setDuration(GLOW_HALF_CYCLE_SECONDS);
+        animation.setAutoreverses(true);
+        animation.setRepeatCount(f32::INFINITY);
+        animation.setTimingFunction(Some(
+            CAMediaTimingFunction::functionWithName(unsafe { kCAMediaTimingFunctionEaseInEaseOut })
+                .as_ref(),
+        ));
+        layer.setOpacity(GLOW_STATIC_OPACITY);
+        layer.addAnimation_forKey(&animation, Some(&NSString::from_str(GLOW_ANIMATION_KEY)));
+    }
+
+    fn stop_ambient_glow(&self) {
+        if let Some(layer) = self.ambient_glow.layer() {
+            layer.removeAnimationForKey(&NSString::from_str(GLOW_ANIMATION_KEY));
+            layer.setOpacity(GLOW_STATIC_OPACITY);
+        }
     }
 }
 
@@ -692,15 +829,15 @@ fn results_viewport_frame(width: f64, visible_rows: usize) -> CGRect {
     )
 }
 
-fn header_brand_frame(search_y: f64) -> CGRect {
+fn header_brand_frame(search_y: f64, mode: PalettePanelMode) -> CGRect {
     CGRect::new(
         CGPoint::new(PANEL_PADDING + 3.0, search_y + HEADER_AUXILIARY_VERTICAL_OFFSET),
-        CGSize::new(42.0, 14.0),
+        CGSize::new(mode.brand_width(), 14.0),
     )
 }
 
-fn header_search_frame(width: f64, search_y: f64) -> CGRect {
-    let search_x = PANEL_PADDING + 52.0;
+fn header_search_frame(width: f64, search_y: f64, mode: PalettePanelMode) -> CGRect {
+    let search_x = PANEL_PADDING + mode.brand_width() + 10.0;
     CGRect::new(
         CGPoint::new(search_x, search_y),
         CGSize::new((width - search_x - 58.0).max(0.0), SEARCH_FIELD_HEIGHT),
@@ -776,6 +913,68 @@ fn visible_row_range(dirty_rect: CGRect, row_count: usize) -> std::ops::Range<us
     let end =
         ((dirty_rect.origin.y + dirty_rect.size.height).max(0.0) / ROW_HEIGHT).ceil() as usize;
     start.min(row_count)..end.min(row_count)
+}
+
+fn draw_ambient_glow(bounds: CGRect) {
+    let Some(graphics) = NSGraphicsContext::currentContext() else {
+        return;
+    };
+    let Some(color_space) = CGColorSpace::new_device_rgb() else {
+        return;
+    };
+    let components = [
+        GLOW_COLOR.0,
+        GLOW_COLOR.1,
+        GLOW_COLOR.2,
+        GLOW_CENTER_ALPHA,
+        GLOW_COLOR.0,
+        GLOW_COLOR.1,
+        GLOW_COLOR.2,
+        GLOW_MIDDLE_ALPHA,
+        GLOW_COLOR.0,
+        GLOW_COLOR.1,
+        GLOW_COLOR.2,
+        0.0,
+    ];
+    let locations = [0.0, 0.42, 1.0];
+    // SAFETY: Core Graphics copies three RGBA component groups and their three
+    // locations during this call; both fixed-size arrays remain valid throughout it.
+    let Some(gradient) = (unsafe {
+        CGGradient::with_color_components(
+            Some(color_space.as_ref()),
+            components.as_ptr(),
+            locations.as_ptr(),
+            locations.len(),
+        )
+    }) else {
+        return;
+    };
+
+    let (source, falloff) = ambient_glow_geometry();
+    let start = CGPoint::new(
+        bounds.origin.x + bounds.size.width * source.x,
+        bounds.origin.y + bounds.size.height * source.y,
+    );
+    let end = CGPoint::new(
+        bounds.origin.x + bounds.size.width * falloff.x,
+        bounds.origin.y + bounds.size.height * falloff.y,
+    );
+    CGContext::draw_radial_gradient(
+        Some(graphics.CGContext().as_ref()),
+        Some(gradient.as_ref()),
+        start,
+        0.0,
+        end,
+        bounds.size.width * 0.55,
+        CGGradientDrawingOptions::empty(),
+    );
+}
+
+fn ambient_glow_geometry() -> (CGPoint, CGPoint) {
+    (
+        CGPoint::new(GLOW_HORIZONTAL_POSITION, 0.96),
+        CGPoint::new(GLOW_HORIZONTAL_POSITION, 0.34),
+    )
 }
 
 fn text_attributes(
@@ -903,12 +1102,57 @@ mod tests {
         let search_y = 100.0;
 
         assert_eq!(
-            header_brand_frame(search_y).origin.y,
+            header_brand_frame(search_y, PalettePanelMode::Windows).origin.y,
             search_y + HEADER_AUXILIARY_VERTICAL_OFFSET
         );
         assert_eq!(
             header_count_frame(640.0, search_y).origin.y,
             search_y + HEADER_AUXILIARY_VERTICAL_OFFSET
         );
+    }
+
+    #[test]
+    fn commands_header_reserves_space_before_the_search_field() {
+        let search_y = 100.0;
+        let brand = header_brand_frame(search_y, PalettePanelMode::Commands);
+        let search = header_search_frame(640.0, search_y, PalettePanelMode::Commands);
+
+        assert!(
+            brand.size.width == PalettePanelMode::Commands.brand_width()
+                && search.origin.x >= brand.origin.x + brand.size.width
+        );
+    }
+
+    #[test]
+    fn ambient_glow_light_axis_uses_the_right_golden_ratio() {
+        let (source, falloff) = ambient_glow_geometry();
+
+        assert!(
+            source.x == GLOW_HORIZONTAL_POSITION
+                && (0.9..=1.0).contains(&source.y)
+                && falloff.x == source.x
+                && falloff.y < 0.5
+        );
+    }
+
+    #[test]
+    fn ambient_glow_breathing_remains_slow_and_controlled() {
+        assert!(
+            0.5 <= GLOW_MIN_OPACITY
+                && GLOW_MIN_OPACITY < GLOW_STATIC_OPACITY
+                && GLOW_STATIC_OPACITY < GLOW_MAX_OPACITY
+                && GLOW_MAX_OPACITY <= 1.0
+                && GLOW_HALF_CYCLE_SECONDS >= 3.0
+        );
+    }
+
+    #[test]
+    fn ambient_glow_effective_peak_stays_below_thirty_percent() {
+        assert!(GLOW_CENTER_ALPHA * f64::from(GLOW_MAX_OPACITY) < 0.3);
+    }
+
+    #[test]
+    fn panel_tint_preserves_backdrop_transparency_without_losing_contrast() {
+        assert!((0.6..=0.8).contains(&PANEL_TINT_ALPHA));
     }
 }

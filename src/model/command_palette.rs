@@ -24,6 +24,12 @@ pub enum PaletteEntryKind {
     Command,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PaletteMode {
+    Windows,
+    Commands,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum PaletteAction {
     FocusWindow {
@@ -151,6 +157,7 @@ impl PaletteMru {
 #[derive(Debug, Clone, PartialEq, Eq)]
 enum PaletteScope {
     Root,
+    Commands,
     Application { pid: i32, previous_query: String },
 }
 
@@ -184,11 +191,19 @@ impl PaletteModel {
 
     pub fn standard() -> Self { Self::new() }
 
-    pub fn begin_session(&mut self, snapshot: PaletteSnapshot, mru: &PaletteMru) {
+    pub fn begin_session(
+        &mut self,
+        snapshot: PaletteSnapshot,
+        mru: &PaletteMru,
+        mode: PaletteMode,
+    ) {
         self.snapshot = snapshot;
         self.query.clear();
         self.normalized_query.clear();
-        self.scope = PaletteScope::Root;
+        self.scope = match mode {
+            PaletteMode::Windows => PaletteScope::Root,
+            PaletteMode::Commands => PaletteScope::Commands,
+        };
         self.rebuild(mru, None);
     }
 
@@ -275,10 +290,12 @@ impl PaletteModel {
     }
 
     pub fn leave_application(&mut self, mru: &PaletteMru) -> bool {
-        let PaletteScope::Application { previous_query, .. } =
-            std::mem::replace(&mut self.scope, PaletteScope::Root)
-        else {
-            return false;
+        let previous_query = match std::mem::replace(&mut self.scope, PaletteScope::Root) {
+            PaletteScope::Application { previous_query, .. } => previous_query,
+            scope => {
+                self.scope = scope;
+                return false;
+            }
         };
         self.query = previous_query;
         self.normalized_query = normalize(&self.query);
@@ -298,13 +315,22 @@ impl PaletteModel {
             .iter()
             .enumerate()
             .filter_map(|(index, entry)| {
-                if let PaletteScope::Application { pid, .. } = self.scope
-                    && (entry.kind != PaletteEntryKind::Window || entry.app_pid != Some(pid))
-                {
-                    return None;
+                match self.scope {
+                    PaletteScope::Root => {}
+                    PaletteScope::Commands if entry.kind != PaletteEntryKind::Command => {
+                        return None;
+                    }
+                    PaletteScope::Commands => {}
+                    PaletteScope::Application { pid, .. }
+                        if entry.kind != PaletteEntryKind::Window || entry.app_pid != Some(pid) =>
+                    {
+                        return None;
+                    }
+                    PaletteScope::Application { .. } => {}
                 }
                 let score = if tokens.is_empty() {
-                    entry.show_when_empty.then_some(mru.score(entry))?
+                    (entry.show_when_empty || matches!(self.scope, PaletteScope::Commands))
+                        .then_some(mru.score(entry))?
                 } else {
                     tokens.iter().try_fold(0_i64, |total, token| {
                         best_term_score(token, &entry.search_terms).map(|score| total + score)
@@ -325,9 +351,15 @@ impl PaletteModel {
             .collect::<Vec<_>>();
         results.sort_by(|left, right| {
             right.score.cmp(&left.score).then_with(|| {
-                self.snapshot.entries[left.index]
-                    .primary
-                    .cmp(&self.snapshot.entries[right.index].primary)
+                let left_entry = &self.snapshot.entries[left.index];
+                let right_entry = &self.snapshot.entries[right.index];
+                if left_entry.kind == PaletteEntryKind::Command
+                    && right_entry.kind == PaletteEntryKind::Command
+                {
+                    left.index.cmp(&right.index)
+                } else {
+                    left_entry.primary.cmp(&right_entry.primary)
+                }
             })
         });
         self.results = results;
@@ -429,6 +461,82 @@ mod tests {
         } else {
             entry
         }
+    }
+
+    fn command_entry(id: &str, label: &str) -> PaletteEntry {
+        PaletteEntry::new(
+            PaletteEntryId::Command(id.to_string()),
+            PaletteEntryKind::Command,
+            label.to_string(),
+            "Rift Command".to_string(),
+            ["command".to_string()],
+            None,
+            PaletteAction::ReloadConfig,
+        )
+        .hidden_when_empty()
+    }
+
+    #[test]
+    fn command_mode_should_show_only_commands_for_an_empty_query() {
+        let command = command_entry("reload", "Reload Config");
+        let mut model = PaletteModel::standard();
+        model.begin_session(
+            PaletteSnapshot {
+                entries: vec![
+                    window_entry(1, 1, "rift"),
+                    app_entry(2, "Notes", false),
+                    command,
+                ],
+                ..PaletteSnapshot::default()
+            },
+            &PaletteMru::default(),
+            PaletteMode::Commands,
+        );
+
+        assert_eq!(
+            model.results().map(|entry| entry.id.clone()).collect::<Vec<_>>(),
+            [PaletteEntryId::Command("reload".to_string())]
+        );
+    }
+
+    #[test]
+    fn command_mode_should_ignore_leave_application_navigation() {
+        let mut model = PaletteModel::standard();
+        model.begin_session(
+            PaletteSnapshot {
+                entries: vec![command_entry("reload", "Reload Config")],
+                ..PaletteSnapshot::default()
+            },
+            &PaletteMru::default(),
+            PaletteMode::Commands,
+        );
+
+        let ignored = !model.leave_application(&PaletteMru::default());
+        assert!(ignored && matches!(model.scope, PaletteScope::Commands));
+    }
+
+    #[test]
+    fn command_mode_should_preserve_snapshot_order_for_equal_scores() {
+        let mut model = PaletteModel::standard();
+        model.begin_session(
+            PaletteSnapshot {
+                entries: vec![
+                    command_entry("workspace.0", "Switch Workspace → Zulu"),
+                    command_entry("workspace.1", "Switch Workspace → Alpha"),
+                ],
+                ..PaletteSnapshot::default()
+            },
+            &PaletteMru::default(),
+            PaletteMode::Commands,
+        );
+
+        assert_eq!(
+            model.results().map(|entry| entry.id.clone()).collect::<Vec<_>>(),
+            [
+                PaletteEntryId::Command("workspace.0".to_string()),
+                PaletteEntryId::Command("workspace.1".to_string()),
+            ]
+        );
     }
 
     #[test]

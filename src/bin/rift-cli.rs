@@ -476,6 +476,8 @@ impl DisplaySelectionArgs {
 enum CommandPaletteCommands {
     /// Toggle the command palette
     Toggle,
+    /// Toggle the command palette directly in command mode
+    Commands,
 }
 
 #[derive(Subcommand)]
@@ -1143,6 +1145,9 @@ fn map_command_palette_command(cmd: CommandPaletteCommands) -> Result<CliCommand
         CommandPaletteCommands::Toggle => Ok(CliCommand::Reactor(reactor::Command::Reactor(
             reactor::ReactorCommand::ToggleCommandPalette,
         ))),
+        CommandPaletteCommands::Commands => Ok(CliCommand::Reactor(reactor::Command::Reactor(
+            reactor::ReactorCommand::ToggleCommandPaletteCommands,
+        ))),
     }
 }
 
@@ -1328,6 +1333,23 @@ mod tests {
             serde_json::to_value(request).unwrap(),
             serde_json::json!({
                 "execute_command": { "command": { "reactor": "toggle_command_palette" } }
+            })
+        );
+    }
+
+    #[test]
+    fn command_palette_cli_uses_typed_commands_scope() {
+        let request = build_execute_request(ExecuteCommands::CommandPalette {
+            palette_cmd: CommandPaletteCommands::Commands,
+        })
+        .unwrap();
+
+        assert_eq!(
+            serde_json::to_value(request).unwrap(),
+            serde_json::json!({
+                "execute_command": {
+                    "command": { "reactor": "toggle_command_palette_commands" }
+                }
             })
         );
     }
