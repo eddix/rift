@@ -1,5 +1,5 @@
 use crate::actor::reactor::Reactor;
-use crate::actor::{border, menu_bar};
+use crate::actor::{border, command_palette, menu_bar};
 use crate::model::projection::{BorderTarget, DesktopState, WorkspaceContext};
 
 impl Reactor {
@@ -33,7 +33,10 @@ impl Reactor {
             menu_tx.send(menu_bar::Event::Snapshot(snapshot.clone()));
         }
         if let Some(border_tx) = self.presentation_manager.border_tx.as_ref() {
-            border_tx.send(border::Event::Snapshot(snapshot));
+            border_tx.send(border::Event::Snapshot(snapshot.clone()));
+        }
+        if let Some(palette_tx) = self.presentation_manager.command_palette_tx.as_ref() {
+            palette_tx.send(command_palette::Event::DesktopSnapshot(snapshot));
         }
     }
 

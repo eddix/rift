@@ -1,18 +1,23 @@
 use std::sync::mpsc::{RecvError, SyncSender, sync_channel};
 
-use objc2_core_foundation::CGRect;
+use objc2_core_foundation::{CGPoint, CGRect};
 use rift_protocol::{
-    ApplicationData, ContainerTreeNode, LayoutStateData, Point, Rect, Size, WindowLayoutPosition,
-    WorkspaceLayoutData,
+    ApplicationData, ContainerTreeNode, LayoutMode, LayoutStateData, Point, Rect, Size,
+    WindowLayoutPosition, WorkspaceLayoutData,
 };
 
 use crate::actor::app::WindowId;
 use crate::actor::reactor::{Event, Reactor, Sender};
 use crate::common::collections::{HashMap, HashSet};
+use crate::model::command_palette::{
+    PaletteAction, PaletteEntry, PaletteEntryId, PaletteEntryKind, PaletteFocusOrigin,
+    PaletteSnapshot,
+};
 use crate::model::server::{
     RuntimeDisplayData, RuntimeWindowData, RuntimeWorkspaceData, protocol_rect,
 };
 use crate::model::virtual_workspace::VirtualWorkspaceId;
+use crate::model::WindowWorkspaceInfo;
 use crate::sys::screen::{ScreenInfo, SpaceId};
 
 fn union_rect(a: Rect, b: Rect) -> Rect {
@@ -130,6 +135,10 @@ impl ReactorQueryHandle {
         self.send_query(QueryRequest::Applications).unwrap_or_default()
     }
 
+    pub fn query_command_palette(&self) -> PaletteSnapshot {
+        self.send_query(QueryRequest::CommandPalette).unwrap_or_default()
+    }
+
     pub fn query_layout_state(
         &self,
         space_id: Option<u64>,
@@ -170,6 +179,7 @@ pub enum QueryRequest {
         resp: SyncSender<Option<RuntimeWindowData>>,
     },
     Applications(SyncSender<Vec<ApplicationData>>),
+    CommandPalette(SyncSender<PaletteSnapshot>),
     LayoutState {
         space_id: Option<u64>,
         workspace_id: Option<usize>,
@@ -201,6 +211,9 @@ impl Reactor {
             }
             QueryRequest::Applications(resp) => {
                 let _ = resp.send(self.query_applications());
+            }
+            QueryRequest::CommandPalette(resp) => {
+                let _ = resp.send(self.query_command_palette());
             }
             QueryRequest::LayoutState { space_id, workspace_id, resp } => {
                 let _ = resp.send(self.query_layout_state(space_id, workspace_id));
@@ -247,6 +260,10 @@ impl Reactor {
     }
 
     pub fn query_applications(&self) -> Vec<ApplicationData> { self.handle_applications_query() }
+
+    pub fn query_command_palette(&self) -> PaletteSnapshot {
+        self.handle_command_palette_query()
+    }
 
     pub fn query_layout_state(
         &self,
@@ -546,6 +563,348 @@ impl Reactor {
             .collect()
     }
 
+    fn handle_command_palette_query(&self) -> PaletteSnapshot {
+        #[derive(Clone)]
+        struct WorkspaceLabel {
+            name: String,
+            is_active: bool,
+        }
+
+        #[cfg(not(test))]
+        let server_focus = crate::sys::window_server::key_focused_window();
+        #[cfg(test)]
+        let server_focus: Option<(WindowId, SpaceId)> = None;
+        let focused_window = server_focus.map(|(window, _)| window).or_else(|| self.main_window());
+        let focused_record = focused_window.and_then(|window| self.state.windows.record(window));
+        let focused_display = focused_window
+            .and_then(|window| self.state.windows.window(window))
+            .and_then(|window| {
+                let center = CGPoint::new(
+                    window.frame_monotonic.origin.x + window.frame_monotonic.size.width / 2.0,
+                    window.frame_monotonic.origin.y + window.frame_monotonic.size.height / 2.0,
+                );
+                self.space_state.screens.iter().find(|screen| {
+                    center.x >= screen.frame.origin.x
+                        && center.x <= screen.frame.origin.x + screen.frame.size.width
+                        && center.y >= screen.frame.origin.y
+                        && center.y <= screen.frame.origin.y + screen.frame.size.height
+                })
+            });
+        let focused_space = focused_record
+            .and_then(|record| record.native_space().or(record.workspace().map(|item| item.space)))
+            .or_else(|| focused_display.and_then(|screen| screen.space))
+            .or_else(|| self.default_query_space());
+
+        let mut display_by_space = HashMap::default();
+        for screen in &self.space_state.screens {
+            let Some(space) = screen.space else {
+                continue;
+            };
+            display_by_space.insert(
+                space,
+                (
+                    screen.name.clone().unwrap_or_else(|| "Display".to_string()),
+                    screen.display_uuid.clone(),
+                    screen.id.as_u32(),
+                ),
+            );
+        }
+
+        let mut workspace_labels: HashMap<WindowWorkspaceInfo, WorkspaceLabel> = HashMap::default();
+        for screen in &self.space_state.screens {
+            let Some(space) = screen.space else {
+                continue;
+            };
+            let active = self.layout_manager.layout_engine.active_workspace(space);
+            for (workspace_id, name) in self
+                .layout_manager
+                .layout_engine
+                .virtual_workspace_manager()
+                .existing_workspaces(space)
+                .iter()
+            {
+                workspace_labels.insert(
+                    WindowWorkspaceInfo {
+                        space,
+                        workspace_id: *workspace_id,
+                    },
+                    WorkspaceLabel {
+                        name: name.clone(),
+                        is_active: active == Some(*workspace_id),
+                    },
+                );
+            }
+        }
+
+        let bundle_ids = self
+            .app_manager
+            .apps
+            .values()
+            .filter_map(|app| app.info.bundle_id.clone())
+            .collect::<HashSet<_>>();
+        let auxiliary_pids = self
+            .app_manager
+            .apps
+            .iter()
+            .filter_map(|(&pid, app)| {
+                app.info
+                    .bundle_id
+                    .as_deref()
+                    .is_some_and(|bundle| is_auxiliary_bundle(bundle, &bundle_ids))
+                    .then_some(pid)
+            })
+            .collect::<HashSet<_>>();
+
+        let mut entries = Vec::new();
+        for (window_id, state) in self.state.windows.iter_windows() {
+            let Some(app) = self.app_manager.apps.get(&window_id.pid) else {
+                continue;
+            };
+            if !is_palette_application_eligible(app.info.bundle_id.as_deref())
+                || !is_palette_window_eligible(state)
+            {
+                continue;
+            }
+            let record = self.state.windows.record(window_id);
+            let assignment = record.and_then(|record| record.workspace());
+            let workspace = assignment.and_then(|assignment| workspace_labels.get(&assignment));
+            let native_space = record
+                .and_then(|record| record.native_space())
+                .or_else(|| assignment.map(|assignment| assignment.space));
+            let display = native_space.and_then(|space| display_by_space.get(&space));
+            let app_name = app
+                .info
+                .localized_name
+                .clone()
+                .unwrap_or_else(|| "Unknown".to_string());
+            let title = if state.info.title.is_empty() {
+                app_name.clone()
+            } else {
+                state.info.title.clone()
+            };
+            let workspace_name = workspace.map(|workspace| workspace.name.as_str());
+            let display_name = display.map(|display| display.0.as_str());
+            let mut metadata = vec![app_name.clone()];
+            if let Some(workspace) = workspace_name {
+                metadata.push(workspace.to_string());
+            } else {
+                metadata.push("Unmanaged".to_string());
+            }
+            if let Some(display) = display_name {
+                metadata.push(display.to_string());
+            }
+            let mut keywords = vec![app_name.clone()];
+            if let Some(bundle_id) = app.info.bundle_id.as_ref() {
+                keywords.push(bundle_id.clone());
+            }
+            if let Some(workspace) = workspace_name {
+                keywords.push(workspace.to_string());
+            }
+            if let Some(display) = display_name {
+                keywords.push(display.to_string());
+            }
+            keywords.push(if state.is_admitted() {
+                "managed".to_string()
+            } else {
+                "unmanaged".to_string()
+            });
+            let current_workspace = workspace.is_some_and(|workspace| workspace.is_active);
+            let current_display = native_space.is_some_and(|space| Some(space) == focused_space);
+            let entry =
+                PaletteEntry::new(
+                    PaletteEntryId::Window(window_id),
+                    PaletteEntryKind::Window,
+                    title,
+                    metadata.join(" · "),
+                    keywords,
+                    Some(window_id.pid),
+                    PaletteAction::FocusWindow {
+                        window_id,
+                        window_server_id: state.info.sys_id,
+                    },
+                )
+                .with_location_boosts(current_workspace, current_display);
+            entries.push(if auxiliary_pids.contains(&window_id.pid) {
+                entry.with_search_penalty(1_500)
+            } else {
+                entry
+            });
+        }
+
+        for (&pid, app) in &self.app_manager.apps {
+            if auxiliary_pids.contains(&pid)
+                || !is_palette_application_eligible(app.info.bundle_id.as_deref())
+            {
+                continue;
+            }
+            let window_count = self
+                .state
+                .windows
+                .window_ids_for_pid(pid)
+                .filter(|&window_id| {
+                    self.state
+                        .windows
+                        .window(window_id)
+                        .is_some_and(is_palette_window_eligible)
+                })
+                .count();
+            let app_name = app
+                .info
+                .localized_name
+                .clone()
+                .unwrap_or_else(|| "Unknown".to_string());
+            let mut keywords = Vec::new();
+            if let Some(bundle_id) = app.info.bundle_id.as_ref() {
+                keywords.push(bundle_id.clone());
+            }
+            let entry = PaletteEntry::new(
+                PaletteEntryId::Application(pid),
+                PaletteEntryKind::Application,
+                app_name,
+                if window_count == 1 {
+                    "1 window".to_string()
+                } else {
+                    format!("{window_count} windows")
+                },
+                keywords,
+                Some(pid),
+                PaletteAction::ActivateApplication(pid),
+            );
+            entries.push(if window_count == 0 {
+                entry
+            } else {
+                entry.hidden_when_empty()
+            });
+        }
+
+        let command_workspace_names = focused_space
+            .map(|space| {
+                self.layout_manager
+                    .layout_engine
+                    .virtual_workspace_manager()
+                    .existing_workspaces(space)
+                    .iter()
+                    .map(|(_, name)| name.clone())
+                    .collect::<Vec<_>>()
+            })
+            .filter(|names| !names.is_empty())
+            .unwrap_or_else(|| self.config.virtual_workspaces.workspace_names.clone());
+        for (index, name) in command_workspace_names.iter().enumerate() {
+            entries.push(command_entry(
+                format!("workspace.switch.{index}"),
+                format!("Switch Workspace → {name}"),
+                ["switch".to_string(), "workspace".to_string(), name.clone()],
+                PaletteAction::SwitchWorkspace(index),
+            ));
+            entries.push(command_entry(
+                format!("workspace.move.{index}"),
+                format!("Move Window → {name}"),
+                ["move".to_string(), "window".to_string(), name.clone()],
+                PaletteAction::MoveWindowToWorkspace(index),
+            ));
+        }
+        entries.extend([
+            command_entry(
+                "workspace.next".to_string(),
+                "Next Workspace".to_string(),
+                ["workspace".to_string(), "forward".to_string()],
+                PaletteAction::NextWorkspace,
+            ),
+            command_entry(
+                "workspace.previous".to_string(),
+                "Previous Workspace".to_string(),
+                ["workspace".to_string(), "back".to_string()],
+                PaletteAction::PreviousWorkspace,
+            ),
+            command_entry(
+                "workspace.last".to_string(),
+                "Last Workspace".to_string(),
+                ["workspace".to_string(), "recent".to_string()],
+                PaletteAction::LastWorkspace,
+            ),
+            command_entry(
+                "window.floating".to_string(),
+                "Toggle Floating".to_string(),
+                ["window".to_string(), "tile".to_string()],
+                PaletteAction::ToggleFloating,
+            ),
+            command_entry(
+                "window.fullscreen".to_string(),
+                "Toggle Fullscreen".to_string(),
+                ["window".to_string(), "maximize".to_string()],
+                PaletteAction::ToggleFullscreen,
+            ),
+            command_entry(
+                "window.fullscreen-within-gaps".to_string(),
+                "Toggle Fullscreen Within Gaps".to_string(),
+                ["window".to_string(), "maximize".to_string(), "gaps".to_string()],
+                PaletteAction::ToggleFullscreenWithinGaps,
+            ),
+            command_entry(
+                "config.reload".to_string(),
+                "Reload Rift Config".to_string(),
+                ["configuration".to_string(), "refresh".to_string()],
+                PaletteAction::ReloadConfig,
+            ),
+        ]);
+        for mode in [
+            LayoutMode::Traditional,
+            LayoutMode::Bsp,
+            LayoutMode::Stack,
+            LayoutMode::MasterStack,
+            LayoutMode::Scrolling,
+        ] {
+            entries.push(command_entry(
+                format!("layout.{mode}"),
+                format!("Set Layout → {mode}"),
+                ["layout".to_string(), mode.to_string()],
+                PaletteAction::SetLayout(mode),
+            ));
+        }
+        for screen in &self.space_state.screens {
+            let name = screen.name.clone().unwrap_or_else(|| "Display".to_string());
+            entries.push(command_entry(
+                format!("display.focus.{}", screen.display_uuid),
+                format!("Focus Display → {name}"),
+                ["display".to_string(), "screen".to_string(), name],
+                PaletteAction::FocusDisplay(screen.display_uuid.clone()),
+            ));
+        }
+
+        #[cfg(not(test))]
+        let frontmost_pid = crate::sys::window_server::frontmost_process_pid()
+            .or_else(|| self.main_window_tracker.frontmost_pid());
+        #[cfg(test)]
+        let frontmost_pid = self.main_window_tracker.frontmost_pid();
+        let focus_origin = frontmost_pid.map(|app_pid| {
+            let window_id = focused_window.filter(|window| window.pid == app_pid);
+            let window_server_id = window_id
+                .and_then(|window| self.state.windows.window(window))
+                .and_then(|state| state.info.sys_id);
+            PaletteFocusOrigin {
+                app_pid,
+                window_id,
+                window_server_id,
+            }
+        });
+        let target_display_id = focused_display
+            .map(|screen| screen.id.as_u32())
+            .or_else(|| focused_space.and_then(|space| display_by_space.get(&space).map(|display| display.2)))
+            .or_else(|| {
+                self.space_state
+                    .screens
+                    .iter()
+                    .find(|screen| screen.space == self.active_display_space())
+                    .map(|screen| screen.id.as_u32())
+            });
+
+        PaletteSnapshot {
+            entries,
+            focus_origin,
+            target_display_id,
+        }
+    }
+
     fn handle_layout_state_query(
         &self,
         space_id_u64: Option<u64>,
@@ -832,4 +1191,43 @@ impl Reactor {
 
         serde_json::to_string_pretty(&out)
     }
+}
+
+fn command_entry(
+    id: String,
+    label: String,
+    keywords: impl IntoIterator<Item = String>,
+    action: PaletteAction,
+) -> PaletteEntry {
+    PaletteEntry::new(
+        PaletteEntryId::Command(id),
+        PaletteEntryKind::Command,
+        label,
+        "Rift Command".to_string(),
+        keywords,
+        None,
+        action,
+    )
+    .hidden_when_empty()
+}
+
+fn is_auxiliary_bundle(bundle_id: &str, running_bundle_ids: &HashSet<String>) -> bool {
+    running_bundle_ids.iter().any(|candidate| {
+        candidate.len() < bundle_id.len()
+            && bundle_id.starts_with(candidate)
+            && bundle_id.as_bytes().get(candidate.len()) == Some(&b'.')
+    })
+}
+
+fn is_palette_application_eligible(bundle_id: Option<&str>) -> bool {
+    bundle_id != Some("com.apple.loginwindow")
+}
+
+fn is_palette_window_eligible(state: &crate::model::reactor::WindowState) -> bool {
+    // AX applications commonly expose dialogs, status items, popovers, and other
+    // implementation-detail windows alongside their real document windows. They
+    // can have a WindowServer id while still being impossible to focus as a
+    // normal user window, so ids and geometry are not sufficient eligibility
+    // signals. Keep unmanaged windows, but require AX's standard-window semantic.
+    state.info.is_standard
 }

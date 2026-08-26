@@ -25,7 +25,7 @@ type Receiver = actor::Receiver<WmEvent>;
 use self::WmCmd::*;
 use crate::actor::app::AppInfo;
 use crate::actor::spaces::ForwardedSpaceState;
-use crate::actor::{self, config, event_tap, mission_control, reactor};
+use crate::actor::{self, command_palette, config, event_tap, mission_control, reactor};
 use crate::model::tx_store::WindowTxStore;
 use crate::sys::dispatch::DispatchExt;
 use crate::sys::screen::CoordinateConverter;
@@ -77,6 +77,7 @@ pub enum WmCmd {
     ShowMissionControlAll,
     ShowMissionControlCurrent,
     DismissMissionControl,
+    ToggleCommandPalette,
     CloseWindow,
 }
 
@@ -130,6 +131,7 @@ pub struct WmController {
     gesture_tap_tx: Option<gesture_tap::Sender>,
     stack_line_tx: Option<crate::actor::stack_line::Sender>,
     mission_control_tx: Option<mission_control::Sender>,
+    command_palette_tx: Option<command_palette::Sender>,
     window_tx_store: Option<WindowTxStore>,
     receiver: Receiver,
     sender: Sender,
@@ -144,6 +146,7 @@ impl WmController {
         event_tap_tx: event_tap::Sender,
         stack_line_tx: crate::actor::stack_line::Sender,
         mission_control_tx: crate::actor::mission_control::Sender,
+        command_palette_tx: crate::actor::command_palette::Sender,
         gesture_tap_tx: Option<gesture_tap::Sender>,
         window_tx_store: Option<WindowTxStore>,
     ) -> (Self, actor::Sender<WmEvent>) {
@@ -160,6 +163,7 @@ impl WmController {
             gesture_tap_tx,
             stack_line_tx: Some(stack_line_tx),
             mission_control_tx: Some(mission_control_tx),
+            command_palette_tx: Some(command_palette_tx),
             window_tx_store,
             receiver,
             sender: sender.clone(),
@@ -268,6 +272,11 @@ impl WmController {
                         self.config.config.clone(),
                     ));
                 }
+                if let Some(tx) = &self.command_palette_tx {
+                    tx.send(command_palette::Event::ConfigUpdated(Box::new(
+                        self.config.config.clone(),
+                    )));
+                }
 
                 if !self.hotkeys_installed {
                     debug!(
@@ -368,6 +377,11 @@ impl WmController {
             Command(Wm(DismissMissionControl)) => {
                 if let Some(tx) = &self.mission_control_tx {
                     let _ = tx.try_send(mission_control::Event::Dismiss);
+                }
+            }
+            Command(Wm(ToggleCommandPalette)) => {
+                if let Some(tx) = &self.command_palette_tx {
+                    tx.send(command_palette::Event::Toggle);
                 }
             }
             Command(Wm(CloseWindow)) => {

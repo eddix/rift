@@ -55,3 +55,25 @@ The remaining migration is deliberately incremental:
 Until a consumer is migrated, its existing transport remains in place. New
 presentation features must use the snapshot boundary rather than adding another
 direct channel from an event handler.
+
+## Command palette
+
+The command palette is a lightweight presentation path independent of Mission
+Control. When summoned, its actor requests one immutable `PaletteSnapshot` from
+the reactor. That snapshot includes tracked managed and unmanaged windows,
+running applications, workspace/display labels, the authoritative frontmost
+focus, and a fixed whitelist of safe Rift commands. Desktop snapshots update
+the in-memory MRU while the panel is hidden; there is no polling or persisted
+history.
+
+The pure model owns the complete ranked result set, fuzzy matching, stable
+selection identity, and application drill-down. The main-thread UI owns only a
+prewarmed borderless `NSPanel`, native AppKit input/scrolling, and rendering
+state. `max_results` controls the visible viewport rather than truncating model
+data; keyboard selection scrolls into view and drawing is limited to dirty rows.
+The panel uses a cold HUD surface, a custom non-interactive scroll indicator,
+and a dynamically sized viewport; those presentation choices remain isolated
+from ranking and actions.
+Printable and IME input stays inside AppKit while navigation becomes typed actor
+events. The panel orders out before dispatching an action or restoring captured
+focus, and it never queries AX, WindowServer, or mutable reactor state directly.

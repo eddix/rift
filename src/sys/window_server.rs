@@ -852,6 +852,19 @@ pub fn key_focused_window() -> Option<(WindowId, SpaceId)> {
     ))
 }
 
+/// Returns the PID WindowServer currently considers globally frontmost.
+pub fn frontmost_process_pid() -> Option<pid_t> {
+    let mut psn = ProcessSerialNumber::default();
+    cg_ok(unsafe { _SLPSGetFrontProcess(&mut psn) }).ok()?;
+    let mut connection = 0;
+    if unsafe { SLSGetConnectionIDForPSN(*G_CONNECTION, &psn, &mut connection) } != 0 {
+        return None;
+    }
+    let mut pid = 0;
+    cg_ok(unsafe { SLSConnectionGetPID(connection, &mut pid) }).ok()?;
+    (pid > 0).then_some(pid)
+}
+
 /// The space on the display currently holding WindowServer focus.
 pub fn active_space() -> SpaceId { SpaceId::new(unsafe { CGSGetActiveSpace(*G_CONNECTION) }) }
 

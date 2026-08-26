@@ -6,6 +6,7 @@ use clap::{Parser, Subcommand};
 use objc2::MainThreadMarker;
 use objc2_application_services::AXUIElement;
 use rift_wm::actor::border::Border;
+use rift_wm::actor::command_palette::CommandPalette;
 use rift_wm::actor::config::ConfigActor;
 use rift_wm::actor::config_watcher::ConfigWatcher;
 use rift_wm::actor::event_tap::EventTap;
@@ -196,6 +197,7 @@ Enable it in System Settings > Desktop & Dock (Mission Control) and restart Rift
     let (event_tap_tx, event_tap_rx) = rift_wm::actor::channel();
     let (menu_tx, menu_rx) = rift_wm::actor::channel();
     let (border_tx, border_rx) = rift_wm::actor::channel();
+    let (command_palette_tx, command_palette_rx) = rift_wm::actor::channel();
     let (stack_line_tx, stack_line_rx) = rift_wm::actor::channel();
     let (wnd_tx, wnd_rx) = rift_wm::actor::channel();
     let window_tx_store = WindowTxStore::new();
@@ -208,6 +210,7 @@ Enable it in System Settings > Desktop & Dock (Mission Control) and restart Rift
         broadcast_tx.clone(),
         menu_tx.clone(),
         border_tx.clone(),
+        command_palette_tx.clone(),
         stack_line_tx.clone(),
         Some((wnd_tx.clone(), window_tx_store.clone())),
         Some(gesture_tap_tx.clone()),
@@ -259,6 +262,7 @@ Enable it in System Settings > Desktop & Dock (Mission Control) and restart Rift
         event_tap_tx.clone(),
         stack_line_tx.clone(),
         mc_tx.clone(),
+        command_palette_tx.clone(),
         Some(gesture_tap_tx.clone()),
         Some(window_tx_store.clone()),
     );
@@ -323,6 +327,14 @@ Enable it in System Settings > Desktop & Dock (Mission Control) and restart Rift
         mtm,
     );
     let border = Border::new(config.clone(), border_rx, mtm);
+    let command_palette = CommandPalette::new(
+        config.clone(),
+        command_palette_rx,
+        command_palette_tx,
+        reactor.clone(),
+        wm_controller_sender.clone(),
+        mtm,
+    );
     let stack_line = StackLine::new(
         config.clone(),
         stack_line_rx,
@@ -370,6 +382,7 @@ Enable it in System Settings > Desktop & Dock (Mission Control) and restart Rift
             supervise("gesture_tap", gesture_tap.run()),
             supervise("menu", menu.run()),
             supervise("border", border.run()),
+            supervise("command_palette", command_palette.run()),
             supervise("stack_line", stack_line.run()),
             supervise("window_notify", wn_actor.run()),
             supervise("mc_native", mission_control_native.run()),

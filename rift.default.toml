@@ -232,6 +232,14 @@ fade_enabled = false
 # native macos mission control fade is about 180ms
 fade_duration_ms = 180.0
 
+# lightweight searchable window/application/Rift-command palette
+[settings.ui.command_palette]
+enabled = false
+# number of ranked rows visible before the complete result set scrolls (1..20)
+max_results = 8
+# panel width in logical points (minimum 360)
+width = 640.0
+
 # Trackpad gestures
 [settings.gestures]
 # Enable horizontal swipes to switch virtual workspaces
@@ -410,6 +418,7 @@ comb1 = "Alt + Shift"
 # Commands
 # - toggle_space_activated
 # - reload_config
+# - toggle_command_palette
 # - next_workspace / prev_workspace
 # - next_workspace = true|false (optional skip-empty override)
 # - prev_workspace = true|false (optional skip-empty override)
@@ -428,6 +437,9 @@ comb1 = "Alt + Shift"
 # - join_window = "left"|"right"|"up"|"down"
 # - consume_or_expel_window = "left"|"right"|"up"|"down"
 # - toggle_stack / toggle_orientation / unjoin_windows
+
+# Example: use Option+P on macOS (Alt in Rift config means Option)
+# "Alt + P" = "toggle_command_palette"
 # - toggle_focus_floating / toggle_window_floating / toggle_fullscreen / toggle_fullscreen_within_gaps
 # - toggle_focus_unmanaged / cycle_unmanaged_windows
 # - resize_window_grow / resize_window_shrink (without param, horizontal is default)

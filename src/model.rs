@@ -1,4 +1,5 @@
 pub mod app_rules;
+pub mod command_palette;
 pub mod floating_position_store;
 pub mod hidden_window_placement;
 pub mod projection;

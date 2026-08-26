@@ -554,6 +554,8 @@ pub struct UiSettings {
     pub stack_line: StackLineSettings,
     #[serde(default)]
     pub mission_control: MissionControlSettings,
+    #[serde(default)]
+    pub command_palette: CommandPaletteSettings,
 }
 
 #[derive(Serialize, Deserialize, Debug, PartialEq, Clone)]
@@ -763,7 +765,52 @@ pub struct MissionControlSettings {
     pub fade_duration_ms: f64,
 }
 
+#[derive(Serialize, Deserialize, Debug, PartialEq, Clone, Copy)]
+#[serde(deny_unknown_fields)]
+pub struct CommandPaletteSettings {
+    #[serde(default = "no")]
+    pub enabled: bool,
+    /// Number of result rows visible before the complete result set scrolls.
+    #[serde(default = "default_command_palette_max_results")]
+    pub max_results: usize,
+    #[serde(default = "default_command_palette_width")]
+    pub width: f64,
+}
+
+impl Default for CommandPaletteSettings {
+    fn default() -> Self {
+        Self {
+            enabled: false,
+            max_results: default_command_palette_max_results(),
+            width: default_command_palette_width(),
+        }
+    }
+}
+
+impl CommandPaletteSettings {
+    pub fn validate(&self) -> Vec<String> {
+        let mut issues = Vec::new();
+        if !(1..=20).contains(&self.max_results) {
+            issues.push(format!(
+                "ui.command_palette.max_results must be between 1 and 20, got {}",
+                self.max_results
+            ));
+        }
+        if !self.width.is_finite() || self.width < 360.0 {
+            issues.push(format!(
+                "ui.command_palette.width must be finite and at least 360, got {}",
+                self.width
+            ));
+        }
+        issues
+    }
+}
+
 fn default_mission_control_fade_duration_ms() -> f64 { 180.0 }
+
+fn default_command_palette_max_results() -> usize { 8 }
+
+fn default_command_palette_width() -> f64 { 640.0 }
 
 fn default_drag_swap_fraction() -> f64 { 0.3 }
 
@@ -1151,6 +1198,7 @@ impl Settings {
 
         issues.extend(self.layout.validate());
         issues.extend(self.ui.border.validate());
+        issues.extend(self.ui.command_palette.validate());
 
         if self.gestures.swipe_vertical_tolerance < 0.0 {
             issues.push(format!(
@@ -1754,6 +1802,7 @@ impl Config {
 mod tests {
     use super::*;
     use crate::actor::reactor;
+    use crate::actor::wm_controller::WmCmd;
     use crate::layout_engine::{LayoutCommand, ResizeOrientation};
 
     #[test]
@@ -1975,6 +2024,27 @@ mod tests {
     }
 
     #[test]
+    fn command_palette_toggle_parses_from_key_bindings() {
+        #[derive(Deserialize)]
+        struct TestConfig {
+            keys: HashMap<String, WmCommand>,
+        }
+
+        let config: TestConfig = toml::from_str(
+            r#"
+            [keys]
+            palette = "toggle_command_palette"
+            "#,
+        )
+        .unwrap();
+
+        assert_eq!(
+            config.keys["palette"],
+            WmCommand::Wm(WmCmd::ToggleCommandPalette)
+        );
+    }
+
+    #[test]
     fn menu_bar_layout_folder_defaults_and_expands_home() {
         let settings: MenuBarSettings = toml::from_str("").unwrap();
 
@@ -2015,6 +2085,28 @@ mod tests {
             width: 0.0,
             corner_radius: f64::NAN,
             ..BorderSettings::default()
+        };
+
+        assert_eq!(settings.validate().len(), 2);
+    }
+
+    #[test]
+    fn command_palette_settings_default_to_eight_visible_rows() {
+        let settings: CommandPaletteSettings = toml::from_str("").unwrap();
+
+        assert_eq!(settings, CommandPaletteSettings {
+            enabled: false,
+            max_results: 8,
+            width: 640.0,
+        });
+    }
+
+    #[test]
+    fn command_palette_settings_reject_invalid_size_limits() {
+        let settings = CommandPaletteSettings {
+            max_results: 0,
+            width: 200.0,
+            ..CommandPaletteSettings::default()
         };
 
         assert_eq!(settings.validate().len(), 2);

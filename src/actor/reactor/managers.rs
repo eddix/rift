@@ -11,8 +11,8 @@ use crate::actor::reactor::Reactor;
 use crate::actor::reactor::animation::AnimationManager;
 use crate::actor::spaces::ForwardedSpaceState;
 use crate::actor::{
-    border, event_tap, gesture_tap, menu_bar, raise_manager, stack_line, window_notify,
-    wm_controller,
+    border, command_palette, event_tap, gesture_tap, menu_bar, raise_manager, stack_line,
+    window_notify, wm_controller,
 };
 use crate::common::collections::{HashMap, HashSet};
 use crate::common::config::{LayoutMode, WindowSnappingSettings};
@@ -67,6 +67,7 @@ pub struct MenuManager {
 pub struct PresentationManager {
     pub menu_tx: Option<menu_bar::Sender>,
     pub border_tx: Option<border::Sender>,
+    pub command_palette_tx: Option<command_palette::Sender>,
     pub projections: ProjectionHub,
     pub transaction_depth: usize,
 }

@@ -118,6 +118,8 @@ impl MainWindowTracker {
 
     pub fn is_globally_frontmost(&self, pid: pid_t) -> bool { self.global_frontmost == Some(pid) }
 
+    pub fn frontmost_pid(&self) -> Option<pid_t> { self.global_frontmost }
+
     pub(crate) fn confirm_native_tab_focus(&mut self, window: WindowId) {
         self.window_server_focus_authoritative = true;
         self.window_server_focus = Some(window);

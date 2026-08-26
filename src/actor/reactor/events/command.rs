@@ -186,7 +186,7 @@ pub fn handle_switch_native_space(
     })
 }
 
-pub fn handle_mission_control_command(
+pub fn handle_wm_command(
     command: crate::actor::wm_controller::WmCmd,
 ) -> anyhow::Result<EventOutcome> {
     Ok(EventOutcome {
