@@ -9,7 +9,7 @@ use bitflags::bitflags;
 use num_enum::{IntoPrimitive, TryFromPrimitive};
 use objc2_application_services::{AXError, AXUIElement};
 use objc2_core_foundation::{
-    CFArray, CGAffineTransform, CFData, CFDictionary, CFNumber, CFString, CFType, CGPoint, CGRect,
+    CFArray, CFData, CFDictionary, CFNumber, CFString, CFType, CGAffineTransform, CGPoint, CGRect,
     CGSize,
 };
 use objc2_core_graphics::{CGContext, CGError, CGEventSourceStateID, CGImage, CGWindowID};
@@ -542,12 +542,17 @@ unsafe extern "C" {
     pub fn SLSOrderWindow(cid: cid_t, wid: u32, order: c_int, relative_to: u32) -> CGError;
     pub fn SLSSetWindowTags(cid: cid_t, wid: u32, tags: *mut u64, tag_count: c_int) -> CGError;
     pub fn SLSClearWindowTags(cid: cid_t, wid: u32, tags: *mut u64, tag_count: c_int) -> CGError;
-    pub fn SLSTransactionCreate(cid: cid_t) -> *mut CFType;
-    pub fn SLSTransactionMoveWindowWithGroup(
-        transaction: *mut CFType,
+    pub fn SLSAddWindowToWindowMovementGroup(cid: cid_t, parent: u32, child: u32) -> CGError;
+    pub fn SLSAddWindowToWindowOrderingGroup(cid: cid_t, parent: u32, child: u32) -> CGError;
+    pub fn SLSCopyWindowGroup(
+        cid: cid_t,
         wid: u32,
-        origin: CGPoint,
+        group_type: *mut CFString,
+        windows: *mut *mut CFArray<CFNumber>,
+        window_count: *mut usize,
     );
+    pub fn SLSTransactionCreate(cid: cid_t) -> *mut CFType;
+    pub fn SLSTransactionMoveWindowWithGroup(transaction: *mut CFType, wid: u32, origin: CGPoint);
     pub fn SLSTransactionSetWindowTransform(
         transaction: *mut CFType,
         wid: u32,
@@ -555,16 +560,8 @@ unsafe extern "C" {
         zero_again: c_int,
         transform: CGAffineTransform,
     );
-    pub fn SLSTransactionSetWindowLevel(
-        transaction: *mut CFType,
-        wid: u32,
-        level: c_int,
-    );
-    pub fn SLSTransactionSetWindowSubLevel(
-        transaction: *mut CFType,
-        wid: u32,
-        sub_level: c_int,
-    );
+    pub fn SLSTransactionSetWindowLevel(transaction: *mut CFType, wid: u32, level: c_int);
+    pub fn SLSTransactionSetWindowSubLevel(transaction: *mut CFType, wid: u32, sub_level: c_int);
     pub fn SLSTransactionOrderWindow(
         transaction: *mut CFType,
         wid: u32,
@@ -572,13 +569,10 @@ unsafe extern "C" {
         relative_to: u32,
     );
     pub fn SLSTransactionCommit(transaction: *mut CFType, synchronous: c_int);
-    pub fn SLSWindowFreezeWithOptions(
-        cid: cid_t,
-        wid: u32,
-        options: *mut CFType,
-    ) -> CGError;
+    pub fn SLSWindowFreezeWithOptions(cid: cid_t, wid: u32, options: *mut CFType) -> CGError;
     pub fn SLSWindowThaw(cid: cid_t, wid: u32) -> CGError;
     pub fn CGSNewRegionWithRect(rect: *const CGRect, region: *mut *mut CFType) -> CGError;
+    pub fn CGRegionCreateWithRects(rects: *const CGRect, count: usize) -> *mut CFType;
     pub fn CGRegionCreateEmptyRegion() -> *mut CFType;
     pub fn SLWindowContextCreate(cid: cid_t, wid: u32, options: *mut CFType) -> *mut CGContext;
     pub fn SLSSetWindowProperty(

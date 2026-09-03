@@ -2408,7 +2408,8 @@ impl Reactor {
                 warn!(%error, "failed to update menu bar config");
             }
             if let Some(tx) = &self.presentation_manager.border_tx
-                && let Err(error) = tx.try_send(border::Event::ConfigUpdated(config.clone()))
+                && let Err(error) =
+                    tx.try_send(border::Event::ConfigUpdated(Box::new(config.clone())))
             {
                 warn!(%error, "failed to update border config");
             }
