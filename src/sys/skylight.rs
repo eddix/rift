@@ -550,6 +550,15 @@ unsafe extern "C" {
     pub fn SLSOrderWindow(cid: cid_t, wid: u32, order: c_int, relative_to: u32) -> CGError;
     pub fn SLSSetWindowTags(cid: cid_t, wid: u32, tags: *mut u64, tag_count: c_int) -> CGError;
     pub fn SLSClearWindowTags(cid: cid_t, wid: u32, tags: *mut u64, tag_count: c_int) -> CGError;
+    pub fn SLSAddWindowToWindowMovementGroup(cid: cid_t, parent: u32, child: u32) -> CGError;
+    pub fn SLSAddWindowToWindowOrderingGroup(cid: cid_t, parent: u32, child: u32) -> CGError;
+    pub fn SLSCopyWindowGroup(
+        cid: cid_t,
+        wid: u32,
+        group_type: *mut CFString,
+        windows: *mut *mut CFArray<CFNumber>,
+        window_count: *mut usize,
+    );
     pub fn SLSTransactionCreate(cid: cid_t) -> *mut CFType;
     pub fn SLSTransactionMoveWindowWithGroup(transaction: *mut CFType, wid: u32, origin: CGPoint);
     pub fn SLSTransactionSetWindowTransform(
@@ -576,6 +585,7 @@ unsafe extern "C" {
         rect_count: c_int,
         region: *mut *mut CFType,
     ) -> CGError;
+    pub fn CGRegionCreateWithRects(rects: *const CGRect, count: usize) -> *mut CFType;
     pub fn CGRegionCreateEmptyRegion() -> *mut CFType;
     pub fn SLWindowContextCreate(cid: cid_t, wid: u32, options: *mut CFType) -> *mut CGContext;
 
