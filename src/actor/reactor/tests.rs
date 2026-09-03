@@ -108,11 +108,7 @@ fn command_palette_query_excludes_nonstandard_auxiliary_windows() {
     reactor.add_test_app_with_info(42, "now.typeless.desktop", "Typeless");
     reactor.add_test_window(status, WindowServerId::new(4201), Some(space), frame);
     reactor.add_test_window(main, WindowServerId::new(4202), Some(space), frame);
-    let status_state = reactor
-        .state
-        .windows
-        .window_mut(status)
-        .expect("status window");
+    let status_state = reactor.state.windows.window_mut(status).expect("status window");
     status_state.info.title = "Status".to_string();
     status_state.info.is_standard = false;
     status_state.info.ax_subrole = Some("AXDialog".to_string());
@@ -122,15 +118,15 @@ fn command_palette_query_excludes_nonstandard_auxiliary_windows() {
     assert!(!snapshot.entries.iter().any(|entry| {
         entry.id == crate::model::command_palette::PaletteEntryId::Window(status)
     }));
-    assert!(snapshot.entries.iter().any(|entry| {
-        entry.id == crate::model::command_palette::PaletteEntryId::Window(main)
-    }));
+    assert!(
+        snapshot.entries.iter().any(|entry| {
+            entry.id == crate::model::command_palette::PaletteEntryId::Window(main)
+        })
+    );
     let app_entry = snapshot
         .entries
         .iter()
-        .find(|entry| {
-            entry.id == crate::model::command_palette::PaletteEntryId::Application(42)
-        })
+        .find(|entry| entry.id == crate::model::command_palette::PaletteEntryId::Application(42))
         .expect("Typeless application entry");
     assert_eq!(app_entry.secondary, "1 window");
     assert!(!app_entry.show_when_empty);
@@ -188,13 +184,14 @@ fn command_palette_query_preserves_frontmost_app_without_main_window() {
 
     let snapshot = reactor.query_command_palette();
 
-    assert_eq!(snapshot.focus_origin, Some(
-        crate::model::command_palette::PaletteFocusOrigin {
+    assert_eq!(
+        snapshot.focus_origin,
+        Some(crate::model::command_palette::PaletteFocusOrigin {
             app_pid: pid,
             window_id: None,
             window_server_id: None,
-        }
-    ));
+        })
+    );
 }
 
 fn palette_with_parent_and_helper_apps() -> crate::model::command_palette::PaletteSnapshot {
@@ -225,10 +222,7 @@ fn command_palette_search_prefers_parent_process_over_auxiliary_process() {
     model.set_snapshot(palette_with_parent_and_helper_apps(), &mru);
     model.set_query("com.example.app".to_string(), &mru);
 
-    assert_eq!(
-        model.selected_entry().and_then(|entry| entry.app_pid),
-        Some(1)
-    );
+    assert_eq!(model.selected_entry().and_then(|entry| entry.app_pid), Some(1));
 }
 
 #[test]
@@ -4677,7 +4671,9 @@ fn native_tab_focus_replaces_the_existing_layout_slot() {
     assert_eq!(reactor.main_window(), Some(current));
     let requests = apps.requests();
     assert!(
-        requests.iter().all(|request| !matches!(request, Request::GetVisibleWindows)),
+        requests
+            .iter()
+            .all(|request| !matches!(request, Request::RefreshWindowInventory(_))),
         "native tab replacement must not feed a global AX refresh back into the burst: {requests:?}"
     );
     let layout = reactor.query_layout_state(Some(space.get()), Some(1)).expect("layout");

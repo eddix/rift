@@ -9,6 +9,7 @@ use rift_protocol::{
 use crate::actor::app::WindowId;
 use crate::actor::reactor::{Event, Reactor, Sender};
 use crate::common::collections::{HashMap, HashSet};
+use crate::model::WindowWorkspaceInfo;
 use crate::model::command_palette::{
     PaletteAction, PaletteEntry, PaletteEntryId, PaletteEntryKind, PaletteFocusOrigin,
     PaletteSnapshot,
@@ -17,7 +18,6 @@ use crate::model::server::{
     RuntimeDisplayData, RuntimeWindowData, RuntimeWorkspaceData, protocol_rect,
 };
 use crate::model::virtual_workspace::VirtualWorkspaceId;
-use crate::model::WindowWorkspaceInfo;
 use crate::sys::screen::{ScreenInfo, SpaceId};
 
 fn union_rect(a: Rect, b: Rect) -> Rect {
@@ -261,9 +261,7 @@ impl Reactor {
 
     pub fn query_applications(&self) -> Vec<ApplicationData> { self.handle_applications_query() }
 
-    pub fn query_command_palette(&self) -> PaletteSnapshot {
-        self.handle_command_palette_query()
-    }
+    pub fn query_command_palette(&self) -> PaletteSnapshot { self.handle_command_palette_query() }
 
     pub fn query_layout_state(
         &self,
@@ -370,10 +368,10 @@ impl Reactor {
             let predicted_map: std::collections::HashMap<WindowId, CGRect> =
                 predicted_positions.into_iter().collect();
 
-            let logical_positions = space_id
-                .and_then(|space| {
-                    self.layout_manager.layout_engine.query_workspace_layout(space, Some(index))
-                })
+            let logical_positions = self
+                .layout_manager
+                .layout_engine
+                .query_workspace_layout(space, Some(index))
                 .map(|snapshot| logical_window_positions(&snapshot.container_tree))
                 .unwrap_or_default();
 
@@ -672,11 +670,7 @@ impl Reactor {
                 .and_then(|record| record.native_space())
                 .or_else(|| assignment.map(|assignment| assignment.space));
             let display = native_space.and_then(|space| display_by_space.get(&space));
-            let app_name = app
-                .info
-                .localized_name
-                .clone()
-                .unwrap_or_else(|| "Unknown".to_string());
+            let app_name = app.info.localized_name.clone().unwrap_or_else(|| "Unknown".to_string());
             let title = if state.info.title.is_empty() {
                 app_name.clone()
             } else {
@@ -710,20 +704,19 @@ impl Reactor {
             });
             let current_workspace = workspace.is_some_and(|workspace| workspace.is_active);
             let current_display = native_space.is_some_and(|space| Some(space) == focused_space);
-            let entry =
-                PaletteEntry::new(
-                    PaletteEntryId::Window(window_id),
-                    PaletteEntryKind::Window,
-                    title,
-                    metadata.join(" · "),
-                    keywords,
-                    Some(window_id.pid),
-                    PaletteAction::FocusWindow {
-                        window_id,
-                        window_server_id: state.info.sys_id,
-                    },
-                )
-                .with_location_boosts(current_workspace, current_display);
+            let entry = PaletteEntry::new(
+                PaletteEntryId::Window(window_id),
+                PaletteEntryKind::Window,
+                title,
+                metadata.join(" · "),
+                keywords,
+                Some(window_id.pid),
+                PaletteAction::FocusWindow {
+                    window_id,
+                    window_server_id: state.info.sys_id,
+                },
+            )
+            .with_location_boosts(current_workspace, current_display);
             entries.push(if auxiliary_pids.contains(&window_id.pid) {
                 entry.with_search_penalty(1_500)
             } else {
@@ -742,17 +735,10 @@ impl Reactor {
                 .windows
                 .window_ids_for_pid(pid)
                 .filter(|&window_id| {
-                    self.state
-                        .windows
-                        .window(window_id)
-                        .is_some_and(is_palette_window_eligible)
+                    self.state.windows.window(window_id).is_some_and(is_palette_window_eligible)
                 })
                 .count();
-            let app_name = app
-                .info
-                .localized_name
-                .clone()
-                .unwrap_or_else(|| "Unknown".to_string());
+            let app_name = app.info.localized_name.clone().unwrap_or_else(|| "Unknown".to_string());
             let mut keywords = Vec::new();
             if let Some(bundle_id) = app.info.bundle_id.as_ref() {
                 keywords.push(bundle_id.clone());
@@ -837,7 +823,11 @@ impl Reactor {
             command_entry(
                 "window.fullscreen-within-gaps".to_string(),
                 "Toggle Fullscreen Within Gaps".to_string(),
-                ["window".to_string(), "maximize".to_string(), "gaps".to_string()],
+                [
+                    "window".to_string(),
+                    "maximize".to_string(),
+                    "gaps".to_string(),
+                ],
                 PaletteAction::ToggleFullscreenWithinGaps,
             ),
             command_entry(
@@ -889,7 +879,10 @@ impl Reactor {
         });
         let target_display_id = focused_display
             .map(|screen| screen.id.as_u32())
-            .or_else(|| focused_space.and_then(|space| display_by_space.get(&space).map(|display| display.2)))
+            .or_else(|| {
+                focused_space
+                    .and_then(|space| display_by_space.get(&space).map(|display| display.2))
+            })
             .or_else(|| {
                 self.space_state
                     .screens

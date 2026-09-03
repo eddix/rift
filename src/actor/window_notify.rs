@@ -4,9 +4,8 @@ use std::time::{Duration, Instant};
 
 use tracing::{debug, trace};
 
-use super::border;
 use super::reactor::{self, Event};
-use super::spaces;
+use super::{border, spaces};
 use crate::actor::app::WindowId;
 use crate::actor::reactor::Requested;
 use crate::common::collections::{HashMap, HashSet};
@@ -284,9 +283,9 @@ impl WindowNotify {
                         if is_border_order_event(event)
                             && let Some(window_id) = evt.window_id
                         {
-                            border_tx.send(border::Event::OrderInvalidated(
-                                WindowServerId::new(window_id),
-                            ));
+                            border_tx.send(border::Event::OrderInvalidated(WindowServerId::new(
+                                window_id,
+                            )));
                         }
                     }
                     CGSEventType::Known(KnownCGSEvent::WindowMoved)
