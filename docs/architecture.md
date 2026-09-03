@@ -31,12 +31,24 @@ visibility, geometry, and Mission Control suppression from the same committed
 state, and does not maintain a second AX or SkyLight observation model.
 
 The border uses one transparent buffered WindowServer window and a persistent
-CGContext on a dedicated SkyLight connection. Creation and synchronization
-follow the same lifecycle as JankyBorders: the window carries the floating and
-ignore-for-events tags, lives on the target space, and moves, inherits the
-target level/sublevel, and orders above the target in one WindowServer
-transaction. Rift queries the resulting tags before making the surface visible;
-an overlay that is still eligible for pointer events fails closed.
+CGContext on a dedicated SkyLight connection. Its WindowServer shape is a
+rounded ring rather than a full rectangle. The overlay carries the floating and
+ignore-for-events tags, lives on the target space, and inherits the target
+level/sublevel. Rift queries the resulting tags before making the surface
+visible. Tag setter failures prevent the surface from becoming visible.
+Read-back is diagnostic because a new private-connection window can temporarily
+return stale tags; the hollow shape independently keeps the target content
+outside the overlay's event footprint.
+
+After initial placement, Rift adds the overlay to the target's movement and
+ordering groups. A verified movement group lets WindowServer carry the border
+in the same compositor operation as an interactive target-window drag, so
+position-only snapshots update model state without replaying stale frame moves.
+An ordering group carries ordinary order-in/out changes. Group attachment is a
+private-SPI optimization, not a correctness requirement: failed or ineffective
+attachments fall back to coalesced frame and relative-order synchronization.
+Changing the target WindowServer id creates a replacement surface instead of
+trying to detach and reuse a child across groups.
 
 A size or style change disables connection updates, freezes the surface,
 reshapes and redraws it, thaws it, and only then restores visibility. Activating
