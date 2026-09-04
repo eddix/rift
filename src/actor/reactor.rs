@@ -699,16 +699,16 @@ impl Reactor {
         }
 
         if !activated.is_empty() {
-            self.apply_app_rules_for_activated_spaces(&activated);
+            self.apply_app_rules_for_spaces(&activated, false);
         }
     }
 
-    fn apply_app_rules_for_activated_spaces(&mut self, activated: &[SpaceId]) {
-        let activated_set: HashSet<SpaceId> = activated.iter().copied().collect();
+    fn apply_app_rules_for_spaces(&mut self, spaces: &[SpaceId], reapply_workspace_rules: bool) {
+        let target_spaces: HashSet<SpaceId> = spaces.iter().copied().collect();
         let mut windows_by_pid: HashMap<pid_t, Vec<WindowId>> = HashMap::default();
 
         for (&wsid, &space) in &self.space_state.active_window_spaces {
-            if !activated_set.contains(&space) {
+            if !target_spaces.contains(&space) {
                 continue;
             }
             let Some(wid) = self.state.windows.tracked_window_id(wsid) else {
@@ -728,7 +728,11 @@ impl Reactor {
                 continue;
             };
 
-            self.process_windows_for_app_rules(window_ids, app_state.info.clone(), false);
+            self.process_windows_for_app_rules(
+                window_ids,
+                app_state.info.clone(),
+                reapply_workspace_rules,
+            );
         }
     }
 
@@ -2830,6 +2834,10 @@ impl Reactor {
         &mut self,
         space_state: ForwardedSpaceState,
     ) -> anyhow::Result<EventOutcome> {
+        let should_reapply_fixed_workspace_rules = (self.space_state.screens.is_empty()
+            && !space_state.screens.is_empty())
+            || space_state.display_set_changed
+            || space_state.topology_window_delta.is_some();
         let mut outcome = EventOutcome::window_membership_changed(false, true);
         let analysis = topology_workflow::analyze_space_snapshot(
             &self.space_state,
@@ -2949,6 +2957,10 @@ impl Reactor {
         }
         if let Some(delta) = topology_window_delta {
             outcome.absorb(self.apply_topology_window_delta(delta));
+        }
+        if should_reapply_fixed_workspace_rules {
+            let active_spaces = self.iter_active_spaces().collect::<Vec<_>>();
+            self.apply_app_rules_for_spaces(&active_spaces, true);
         }
         let active_windows = self.authoritative_active_space_windows();
         self.finalize_space_change(&spaces, active_windows, releases_lifecycle_refresh_quarantine);

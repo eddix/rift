@@ -813,6 +813,96 @@ fn app_rule_places_window_on_workspace_affinity_display_without_switching_worksp
 }
 
 #[test]
+fn first_space_activation_reapplies_fixed_rule_to_provisional_workspace_assignment() {
+    let mut settings = crate::common::config::VirtualWorkspaceSettings::default();
+    settings.app_rules = vec![AppWorkspaceRule {
+        app_id: Some("com.testapp1".to_string()),
+        workspace: Some(WorkspaceSelector::Index(1)),
+        ..Default::default()
+    }];
+    let mut reactor = test_reactor_with_workspace_settings(&settings);
+    reactor.config.virtual_workspaces = settings;
+    let screen = CGRect::new(CGPoint::new(0., 0.), CGSize::new(1000., 1000.));
+    let space = SpaceId::new(1);
+    let window = WindowId::new(1, 1);
+    let window_server_id = WindowServerId::new(10_001);
+    reactor.add_test_app_with_info(1, "com.testapp1", "TestApp1");
+    reactor.add_test_window(window, window_server_id, Some(space), screen);
+    let provisional_workspace = reactor.test_workspace(space, 0);
+    let configured_workspace = reactor.test_workspace(space, 1);
+    assert!(reactor.assign_test_window_to_workspace(space, window, provisional_workspace));
+
+    reactor.handle_event(space_state_event_with(
+        vec![screen],
+        vec![Some(space)],
+        |state| {
+            state.has_seen_display_set = true;
+            state.active_window_spaces.insert(window_server_id, space);
+        },
+    ));
+
+    assert_eq!(
+        reactor.test_workspace_for_window(space, window),
+        Some(configured_workspace)
+    );
+}
+
+#[test]
+fn display_topology_change_reapplies_fixed_rule_after_space_reassignment() {
+    let mut settings = crate::common::config::VirtualWorkspaceSettings::default();
+    settings.app_rules = vec![AppWorkspaceRule {
+        app_id: Some("com.testapp1".to_string()),
+        workspace: Some(WorkspaceSelector::Index(1)),
+        ..Default::default()
+    }];
+    let mut reactor = test_reactor_with_workspace_settings(&settings);
+    reactor.config.virtual_workspaces = settings;
+    let builtin = CGRect::new(CGPoint::new(0., 0.), CGSize::new(1000., 1000.));
+    let external = CGRect::new(CGPoint::new(1000., 0.), CGSize::new(1000., 1000.));
+    let builtin_space = SpaceId::new(1);
+    let external_space = SpaceId::new(2);
+    let window = WindowId::new(1, 1);
+    let window_server_id = WindowServerId::new(10_001);
+    reactor.handle_event(space_state_event(vec![builtin, external], vec![
+        Some(builtin_space),
+        Some(external_space),
+    ]));
+    reactor.add_test_app_with_info(1, "com.testapp1", "TestApp1");
+    reactor.add_test_window(window, window_server_id, Some(external_space), external);
+    let provisional_workspace = reactor.test_workspace(external_space, 0);
+    assert!(
+        reactor.assign_test_window_to_workspace(external_space, window, provisional_workspace,)
+    );
+    reactor
+        .state
+        .windows
+        .set_window_server_space(window_server_id, Some(builtin_space));
+    let builtin_provisional_workspace = reactor.test_workspace(builtin_space, 0);
+    assert!(reactor.assign_test_window_to_workspace(
+        builtin_space,
+        window,
+        builtin_provisional_workspace,
+    ));
+
+    reactor.handle_event(space_state_event_with(
+        vec![builtin],
+        vec![Some(builtin_space)],
+        |state| {
+            state.has_seen_display_set = true;
+            state.display_set_changed = true;
+            state.topology_changed = true;
+            state.active_window_spaces.insert(window_server_id, builtin_space);
+        },
+    ));
+    let configured_workspace = reactor.test_workspace(builtin_space, 1);
+
+    assert_eq!(
+        reactor.test_workspace_for_window(builtin_space, window),
+        Some(configured_workspace)
+    );
+}
+
+#[test]
 fn reconnecting_affinity_display_moves_existing_managed_window_back() {
     let mut settings = crate::common::config::VirtualWorkspaceSettings::default();
     settings.app_rules = vec![AppWorkspaceRule {
