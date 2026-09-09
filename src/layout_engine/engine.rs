@@ -34,6 +34,13 @@ pub use rift_protocol::LayoutCommand;
 const SMART_FLOATING_WIDTH_RATIO: f64 = 0.8;
 const SMART_FLOATING_HEIGHT_RATIO: f64 = 0.93;
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum AppRuleEvaluationMode {
+    PreserveWorkspace,
+    TitleChange,
+    ReapplyWorkspace,
+}
+
 fn requested_floating_frame(
     mut frame: CGRect,
     screen: CGRect,
@@ -2792,7 +2799,7 @@ impl LayoutEngine {
             ax_role,
             ax_subrole,
             ax_identifier,
-            false,
+            AppRuleEvaluationMode::PreserveWorkspace,
         )
     }
 
@@ -2818,7 +2825,37 @@ impl LayoutEngine {
             ax_role,
             ax_subrole,
             ax_identifier,
-            true,
+            AppRuleEvaluationMode::TitleChange,
+        )
+    }
+
+    /// Re-evaluates all app-rule effects, including the configured workspace.
+    ///
+    /// This is reserved for topology recovery. Ordinary rediscovery preserves the
+    /// current workspace, while title changes use title-specific rule semantics.
+    pub fn reapply_window_workspace_rule_with_app_info(
+        &mut self,
+        window_store: &mut WindowStore,
+        window_id: WindowId,
+        space: SpaceId,
+        app_bundle_id: Option<&str>,
+        app_name: Option<&str>,
+        window_title: Option<&str>,
+        ax_role: Option<&str>,
+        ax_subrole: Option<&str>,
+        ax_identifier: Option<&str>,
+    ) -> Result<AppRuleResult, crate::model::virtual_workspace::WorkspaceError> {
+        self.assign_window_with_app_info_policy(
+            window_store,
+            window_id,
+            space,
+            app_bundle_id,
+            app_name,
+            window_title,
+            ax_role,
+            ax_subrole,
+            ax_identifier,
+            AppRuleEvaluationMode::ReapplyWorkspace,
         )
     }
 
@@ -2833,7 +2870,7 @@ impl LayoutEngine {
         ax_role: Option<&str>,
         ax_subrole: Option<&str>,
         ax_identifier: Option<&str>,
-        reapply_workspace_rule: bool,
+        mode: AppRuleEvaluationMode,
     ) -> Result<AppRuleResult, crate::model::virtual_workspace::WorkspaceError> {
         let observation = window_store.window(window_id).map(|window| {
             (
@@ -2861,10 +2898,11 @@ impl LayoutEngine {
             ax_subrole,
             ax_identifier,
         };
-        let mut decision = if reapply_workspace_rule {
-            self.app_rules.evaluate_for_title_change(context)
-        } else {
-            self.app_rules.evaluate(context)
+        let mut decision = match mode {
+            AppRuleEvaluationMode::TitleChange => self.app_rules.evaluate_for_title_change(context),
+            AppRuleEvaluationMode::PreserveWorkspace | AppRuleEvaluationMode::ReapplyWorkspace => {
+                self.app_rules.evaluate(context)
+            }
         };
         // A persistence match is an explicit restoration of the user's previous
         // workspace. App rules still control admission and other effects, but
@@ -2872,20 +2910,18 @@ impl LayoutEngine {
         if restored && let Some(decision) = &mut decision {
             decision.workspace = None;
         }
-        if reapply_workspace_rule {
-            self.virtual_workspace_manager.apply_app_rule_decision(
-                window_store,
-                window_id,
-                space,
-                decision,
-            )
-        } else {
-            self.virtual_workspace_manager.apply_app_rule_decision_preserving_workspace(
-                window_store,
-                window_id,
-                space,
-                decision,
-            )
+        match mode {
+            AppRuleEvaluationMode::PreserveWorkspace => {
+                self.virtual_workspace_manager.apply_app_rule_decision_preserving_workspace(
+                    window_store,
+                    window_id,
+                    space,
+                    decision,
+                )
+            }
+            AppRuleEvaluationMode::TitleChange | AppRuleEvaluationMode::ReapplyWorkspace => self
+                .virtual_workspace_manager
+                .apply_app_rule_decision(window_store, window_id, space, decision),
         }
     }
 

@@ -158,6 +158,13 @@ pub enum SpaceEventKind {
     Fullscreen,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum AppRuleProcessingMode {
+    PreserveWorkspace,
+    TitleChange,
+    ReapplyWorkspace,
+}
+
 #[serde_as]
 #[derive(Serialize, Deserialize, Debug)]
 pub enum Event {
@@ -699,11 +706,11 @@ impl Reactor {
         }
 
         if !activated.is_empty() {
-            self.apply_app_rules_for_spaces(&activated, false);
+            self.apply_app_rules_for_spaces(&activated, AppRuleProcessingMode::PreserveWorkspace);
         }
     }
 
-    fn apply_app_rules_for_spaces(&mut self, spaces: &[SpaceId], reapply_workspace_rules: bool) {
+    fn apply_app_rules_for_spaces(&mut self, spaces: &[SpaceId], mode: AppRuleProcessingMode) {
         let target_spaces: HashSet<SpaceId> = spaces.iter().copied().collect();
         let mut windows_by_pid: HashMap<pid_t, Vec<WindowId>> = HashMap::default();
 
@@ -728,11 +735,7 @@ impl Reactor {
                 continue;
             };
 
-            self.process_windows_for_app_rules(
-                window_ids,
-                app_state.info.clone(),
-                reapply_workspace_rules,
-            );
+            self.process_windows_for_app_rules(window_ids, app_state.info.clone(), mode);
         }
     }
 
@@ -2234,7 +2237,11 @@ impl Reactor {
                 if let Some(app_info) =
                     self.app_manager.apps.get(&window.pid).map(|app| app.info.clone())
                 {
-                    self.process_windows_for_app_rules(vec![window], app_info, false);
+                    self.process_windows_for_app_rules(
+                        vec![window],
+                        app_info,
+                        AppRuleProcessingMode::PreserveWorkspace,
+                    );
                 }
                 if self.state.windows.window(window).is_some_and(WindowState::is_admitted) {
                     self.send_layout_event(LayoutEvent::WindowAdded(space, window));
@@ -2827,7 +2834,11 @@ impl Reactor {
             None => return,
         };
 
-        self.process_windows_for_app_rules(vec![window_id], app_info, true);
+        self.process_windows_for_app_rules(
+            vec![window_id],
+            app_info,
+            AppRuleProcessingMode::TitleChange,
+        );
     }
 
     fn handle_authoritative_space_snapshot(
@@ -2960,7 +2971,10 @@ impl Reactor {
         }
         if should_reapply_fixed_workspace_rules {
             let active_spaces = self.iter_active_spaces().collect::<Vec<_>>();
-            self.apply_app_rules_for_spaces(&active_spaces, true);
+            self.apply_app_rules_for_spaces(
+                &active_spaces,
+                AppRuleProcessingMode::ReapplyWorkspace,
+            );
         }
         let active_windows = self.authoritative_active_space_windows();
         self.finalize_space_change(&spaces, active_windows, releases_lifecycle_refresh_quarantine);
@@ -3907,7 +3921,7 @@ impl Reactor {
         &mut self,
         window_ids: Vec<WindowId>,
         app_info: AppInfo,
-        reapply_effects: bool,
+        mode: AppRuleProcessingMode,
     ) {
         if window_ids.is_empty() {
             return;
@@ -3959,8 +3973,8 @@ impl Reactor {
                         )
                     });
                     let engine = &mut self.layout_manager.layout_engine;
-                    if reapply_effects {
-                        engine.reapply_window_with_app_info(
+                    match mode {
+                        AppRuleProcessingMode::TitleChange => engine.reapply_window_with_app_info(
                             &mut self.state.windows,
                             *wid,
                             space,
@@ -3970,26 +3984,38 @@ impl Reactor {
                             window_metadata.as_ref().and_then(|metadata| metadata.1.as_deref()),
                             window_metadata.as_ref().and_then(|metadata| metadata.2.as_deref()),
                             window_metadata.as_ref().and_then(|metadata| metadata.3.as_deref()),
-                        )
-                    } else {
-                        engine.assign_window_with_app_info(
-                            &mut self.state.windows,
-                            *wid,
-                            space,
-                            app_info.bundle_id.as_deref(),
-                            app_info.localized_name.as_deref(),
-                            window_metadata.as_ref().map(|metadata| metadata.0.as_str()),
-                            window_metadata.as_ref().and_then(|metadata| metadata.1.as_deref()),
-                            window_metadata.as_ref().and_then(|metadata| metadata.2.as_deref()),
-                            window_metadata.as_ref().and_then(|metadata| metadata.3.as_deref()),
-                        )
+                        ),
+                        AppRuleProcessingMode::ReapplyWorkspace => engine
+                            .reapply_window_workspace_rule_with_app_info(
+                                &mut self.state.windows,
+                                *wid,
+                                space,
+                                app_info.bundle_id.as_deref(),
+                                app_info.localized_name.as_deref(),
+                                window_metadata.as_ref().map(|metadata| metadata.0.as_str()),
+                                window_metadata.as_ref().and_then(|metadata| metadata.1.as_deref()),
+                                window_metadata.as_ref().and_then(|metadata| metadata.2.as_deref()),
+                                window_metadata.as_ref().and_then(|metadata| metadata.3.as_deref()),
+                            ),
+                        AppRuleProcessingMode::PreserveWorkspace => engine
+                            .assign_window_with_app_info(
+                                &mut self.state.windows,
+                                *wid,
+                                space,
+                                app_info.bundle_id.as_deref(),
+                                app_info.localized_name.as_deref(),
+                                window_metadata.as_ref().map(|metadata| metadata.0.as_str()),
+                                window_metadata.as_ref().and_then(|metadata| metadata.1.as_deref()),
+                                window_metadata.as_ref().and_then(|metadata| metadata.2.as_deref()),
+                                window_metadata.as_ref().and_then(|metadata| metadata.3.as_deref()),
+                            ),
                     }
                 };
 
                 match assign_result {
                     Ok(AppRuleResult::Managed(assignment)) => {
                         let effective_floating = assignment.should_float(was_floating);
-                        let needs_layout_refresh = reapply_effects
+                        let needs_layout_refresh = mode != AppRuleProcessingMode::PreserveWorkspace
                             || previous_workspace != Some(assignment.workspace_id)
                             || was_floating != effective_floating
                             || was_ignored;
