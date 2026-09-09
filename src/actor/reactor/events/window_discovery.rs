@@ -148,7 +148,6 @@ pub(crate) fn assign_window(
     wid: WindowId,
     space: SpaceId,
     app_info: Option<&AppInfo>,
-    reapply: bool,
 ) -> (Option<AppRuleEffects>, Option<LayoutEvent>) {
     let result = if let Some(window) = state.windows.window(wid) {
         let (title, role, subrole, identifier) = (
@@ -169,7 +168,6 @@ pub(crate) fn assign_window(
                 ax_subrole: subrole.as_deref(),
                 ax_identifier: identifier.as_deref(),
             },
-            reapply,
         )
     } else {
         Err(WorkspaceError::AssignmentFailed)
@@ -263,8 +261,7 @@ pub(crate) fn emit_layout_events(
     for (space, mut windows_for_space) in app_windows {
         windows_for_space.sort_unstable();
         for wid in windows_for_space {
-            let (effects, removal) =
-                assign_window(state, layout, wid, space, app_info.as_ref(), false);
+            let (effects, removal) = assign_window(state, layout, wid, space, app_info.as_ref());
             if let Some(event) = removal {
                 outcome = outcome.with_layout_event(event);
             }

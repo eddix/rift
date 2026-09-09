@@ -150,7 +150,6 @@ fn restored_workspace_is_resolved_before_app_rule_assignment() {
                 ax_subrole: None,
                 ax_identifier: None,
             },
-            false,
         )
         .unwrap();
     let AppRuleResult::Managed(effects) = result else {
