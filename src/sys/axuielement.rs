@@ -53,9 +53,17 @@ pub(crate) struct WindowAttributes {
     pub(crate) subrole: String,
     pub(crate) minimized: bool,
     pub(crate) title: String,
+    pub(crate) identifier: Option<String>,
 }
 
-const WINDOW_ATTRIBUTES: [&str; 5] = ["AXFrame", "AXRole", "AXSubrole", "AXMinimized", "AXTitle"];
+const WINDOW_ATTRIBUTES: [&str; 6] = [
+    "AXFrame",
+    "AXRole",
+    "AXSubrole",
+    "AXMinimized",
+    "AXTitle",
+    "AXIdentifier",
+];
 
 thread_local! {
     // Only immutable attribute names are reused; window values are always fresh.
@@ -213,6 +221,7 @@ impl AXUIElement {
             subrole: self.subrole()?,
             minimized: self.minimized().unwrap_or_default(),
             title: self.title().unwrap_or_default(),
+            identifier: self.identifier().ok(),
         })
     }
 
@@ -492,12 +501,14 @@ fn decode_window_attributes(
         .and_then(|v| v.downcast::<CFBoolean>().map_err(|_| Error::Ax(AXError::Failure)))
         .map(|v| v.value());
     let title = next().and_then(decode_string);
+    let identifier = next().and_then(decode_string);
     Ok(WindowAttributes {
         frame: frame?,
         role: role?,
         subrole: subrole?,
         minimized: minimized.unwrap_or_default(),
         title: title.unwrap_or_default(),
+        identifier: identifier.ok(),
     })
 }
 
@@ -544,5 +555,17 @@ mod tests {
         by_element.insert(first, 1);
 
         assert_eq!(by_element.get(&second), Some(&1));
+    }
+
+    #[test]
+    fn bulk_window_attributes_request_identifier_with_window_metadata() {
+        assert_eq!(WINDOW_ATTRIBUTES, [
+            "AXFrame",
+            "AXRole",
+            "AXSubrole",
+            "AXMinimized",
+            "AXTitle",
+            "AXIdentifier"
+        ]);
     }
 }
