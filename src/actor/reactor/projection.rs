@@ -12,8 +12,21 @@ impl Reactor {
 
         let displays = self.query_displays();
         let menu_bar_space = self.menu_bar_space();
-        let menu_bar_displays = displays
+        let mut menu_bar_sources = displays
             .iter()
+            .filter(|display| display.info.space.is_some())
+            .collect::<Vec<_>>();
+        menu_bar_sources.sort_by(|a, b| {
+            a.info
+                .frame
+                .origin
+                .x
+                .total_cmp(&b.info.frame.origin.x)
+                .then_with(|| a.info.frame.origin.y.total_cmp(&b.info.frame.origin.y))
+                .then_with(|| a.info.display_uuid.cmp(&b.info.display_uuid))
+        });
+        let menu_bar_displays = menu_bar_sources
+            .into_iter()
             .filter_map(|display| {
                 let space = display.info.space?;
                 Some(DisplayWorkspaceContext {
@@ -78,11 +91,17 @@ impl Reactor {
 
         let window_server_id = state.info.sys_id?;
         let space = self.best_space_for_window_id(window)?;
+        let corner_radius = self
+            .state
+            .windows
+            .get_window_server_info(window_server_id)
+            .and_then(|info| info.corner_radius);
         self.state.windows.is_window_visible(window_server_id).then_some(BorderTarget {
             window,
             window_server_id,
             space,
             frame: state.frame_monotonic,
+            corner_radius,
         })
     }
 }

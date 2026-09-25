@@ -48,6 +48,7 @@ pub struct BorderTarget {
     pub window_server_id: WindowServerId,
     pub space: SpaceId,
     pub frame: CGRect,
+    pub corner_radius: Option<f64>,
 }
 
 /// Immutable data from which presentation actors derive their own views.

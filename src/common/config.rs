@@ -828,6 +828,8 @@ pub struct BorderSettings {
     #[serde(default = "default_border_corner_radius")]
     pub corner_radius: f64,
     #[serde(default = "yes")]
+    pub adaptive_corner_radius: bool,
+    #[serde(default = "yes")]
     pub hidpi: bool,
 }
 
@@ -838,6 +840,7 @@ impl Default for BorderSettings {
             width: default_border_width(),
             color: default_border_color(),
             corner_radius: default_border_corner_radius(),
+            adaptive_corner_radius: true,
             hidpi: true,
         }
     }
@@ -2423,6 +2426,7 @@ mod tests {
             width: 4.0,
             color: 0xfff3_7021,
             corner_radius: 10.0,
+            adaptive_corner_radius: true,
             hidpi: true,
         });
     }
@@ -2436,6 +2440,17 @@ mod tests {
         };
 
         assert_eq!(settings.validate().len(), 2);
+    }
+
+    #[test]
+    fn border_settings_can_disable_adaptive_corner_radius() {
+        let settings: BorderSettings =
+            toml::from_str("adaptive_corner_radius = false\ncorner_radius = 14.0").unwrap();
+
+        assert_eq!(
+            (settings.adaptive_corner_radius, settings.corner_radius),
+            (false, 14.0)
+        );
     }
 
     #[test]

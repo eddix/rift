@@ -28,7 +28,7 @@ use crate::common::config::{
 use crate::sys::event::{self, Hotkey, KeyCode};
 use crate::sys::hotkey::{
     Modifiers, is_modifier_key, key_code_from_event, modifier_key_is_active,
-    modifiers_from_flags_with_keys,
+    modifiers_from_flags_with_keys, refresh_virtual_keymap,
 };
 use crate::sys::screen::{CoordinateConverter, SpaceId};
 use crate::sys::{gesture, power, window_server};
@@ -524,6 +524,7 @@ impl Input {
             }
             Request::SetBindingMode(target) => self.transition_binding_mode(&target),
             Request::KeyboardLayoutChanged => {
+                refresh_virtual_keymap();
                 if self.hotkeys_active.get() {
                     self.rebuild_binding_maps();
                     should_rebuild_mask = true;

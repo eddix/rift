@@ -8,17 +8,15 @@ use objc2_core_foundation::{
 use objc2_core_graphics::{CGContext, CGError};
 
 use super::skylight::{
-    CFRelease, CGRegionCreateEmptyRegion, CGRegionCreateWithRects, CGSNewRegionWithRect,
-    CGSNewRegionWithRectList, G_CONNECTION, SLSAddWindowToWindowMovementGroup,
-    SLSAddWindowToWindowOrderingGroup, SLSClearWindowTags, SLSCopyWindowGroup,
-    SLSDisableUpdate, SLSFlushWindowContentRegion, SLSMoveWindow, SLSMoveWindowsToManagedSpace,
-    SLSNewConnection, SLSNewWindow, SLSNewWindowWithOpaqueShapeAndContext, SLSOrderWindow,
-    SLSReenableUpdate, SLSReleaseConnection, SLSReleaseWindow, SLSSetWindowAlpha,
-    SLSSetWindowBackgroundBlurRadiusStyle, SLSSetWindowLevel, SLSSetWindowOpacity,
-    SLSSetWindowProperty, SLSSetWindowResolution, SLSSetWindowShadowParameters,
-    SLSSetWindowShape, SLSSetWindowSubLevel, SLSSetWindowTags, SLSTransactionCommit,
-    SLSTransactionCreate, SLSTransactionMoveWindowWithGroup, SLSTransactionOrderWindow,
-    SLSTransactionSetWindowLevel, SLSTransactionSetWindowSubLevel,
+    CFRelease, CGRegionCreateEmptyRegion, CGSNewRegionWithRect, CGSNewRegionWithRectList,
+    G_CONNECTION, SLSClearWindowTags, SLSDisableUpdate, SLSFlushWindowContentRegion,
+    SLSMoveWindowsToManagedSpace, SLSNewConnection, SLSNewWindow,
+    SLSNewWindowWithOpaqueShapeAndContext, SLSOrderWindow, SLSReenableUpdate, SLSReleaseConnection,
+    SLSReleaseWindow, SLSSetWindowAlpha, SLSSetWindowBackgroundBlurRadiusStyle, SLSSetWindowLevel,
+    SLSSetWindowOpacity, SLSSetWindowProperty, SLSSetWindowResolution,
+    SLSSetWindowShadowParameters, SLSSetWindowShape, SLSSetWindowSubLevel, SLSSetWindowTags,
+    SLSTransactionCommit, SLSTransactionCreate, SLSTransactionMoveWindowWithGroup,
+    SLSTransactionOrderWindow, SLSTransactionSetWindowLevel, SLSTransactionSetWindowSubLevel,
     SLSTransactionSetWindowTransform, SLSWindowFreezeWithOptions, SLSWindowThaw,
     SLWindowContextCreate, cid_t,
 };
@@ -86,16 +84,6 @@ impl CFRegion {
         Self(unsafe { CFRetained::from_raw(NonNull::new_unchecked(CGRegionCreateEmptyRegion())) })
     }
 
-    fn from_rects(rects: &[CGRect]) -> Result<Self, CGError> {
-        if rects.is_empty() {
-            return Err(CGError(1000));
-        }
-        let region = unsafe { CGRegionCreateWithRects(rects.as_ptr(), rects.len()) };
-        NonNull::new(region)
-            .map(|region| Self(unsafe { CFRetained::from_raw(region) }))
-            .ok_or(CGError(1000))
-    }
-
     #[inline]
     pub(super) fn as_ptr(&self) -> *mut CFType { CFRetained::<CFType>::as_ptr(&self.0).as_ptr() }
 }
@@ -120,9 +108,6 @@ pub enum CgsWindowError {
     Property(CGError),
     Context(CGError),
     Flush(CGError),
-    Events(CGError),
-    MovementGroup(CGError),
-    OrderingGroup(CGError),
     Connection(CGError),
     Transaction(CGError),
 }
@@ -144,9 +129,6 @@ impl fmt::Display for CgsWindowError {
             Property(e) => write!(f, "CGS window property error: {:?}", e),
             Context(e) => write!(f, "CGS window context error: {:?}", e),
             Flush(e) => write!(f, "CGS window flush error: {:?}", e),
-            Events(e) => write!(f, "CGS window event-routing error: {:?}", e),
-            MovementGroup(e) => write!(f, "CGS movement-group error: {:?}", e),
-            OrderingGroup(e) => write!(f, "CGS ordering-group error: {:?}", e),
             Connection(e) => write!(f, "CGS connection error: {:?}", e),
             Transaction(e) => write!(f, "CGS window transaction error: {:?}", e),
         }
@@ -155,27 +137,36 @@ impl fmt::Display for CgsWindowError {
 
 impl std::error::Error for CgsWindowError {}
 
+fn create_transaction(connection: cid_t) -> Result<CFRetained<CFType>, CgsWindowError> {
+    let transaction = NonNull::new(unsafe { SLSTransactionCreate(connection) })
+        .ok_or(CgsWindowError::Transaction(CGError(1000)))?;
+    Ok(unsafe { CFRetained::from_raw(transaction) })
+}
+
+#[derive(Debug, Clone, Copy)]
+pub(crate) struct CgsWindowMotionHandle {
+    id: WindowId,
+    connection: cid_t,
+}
+
+impl CgsWindowMotionHandle {
+    pub(crate) fn move_with_group(self, origin: CGPoint) -> Result<(), CgsWindowError> {
+        let transaction = create_transaction(self.connection)?;
+        let transaction = CFRetained::as_ptr(&transaction).as_ptr();
+        unsafe {
+            SLSTransactionMoveWindowWithGroup(transaction, self.id, origin);
+            SLSTransactionCommit(transaction, 0);
+        }
+        Ok(())
+    }
+}
+
 #[derive(Debug)]
 pub struct CgsWindow {
     id: WindowId,
     connection: cid_t,
     owned: bool,
     owns_connection: bool,
-}
-
-#[derive(Debug, Clone, Copy)]
-enum WindowGroupKind {
-    Movement,
-    Ordering,
-}
-
-impl WindowGroupKind {
-    fn name(self) -> &'static str {
-        match self {
-            Self::Movement => "movementGroup",
-            Self::Ordering => "orderingGroup",
-        }
-    }
 }
 
 impl CgsWindow {
@@ -296,6 +287,14 @@ impl CgsWindow {
     pub fn id(&self) -> WindowId { self.id }
 
     #[inline]
+    pub(crate) fn motion_handle(&self) -> CgsWindowMotionHandle {
+        CgsWindowMotionHandle {
+            id: self.id,
+            connection: self.connection,
+        }
+    }
+
+    #[inline]
     pub fn into_unowned(mut self) -> Self {
         self.owned = false;
         self
@@ -376,91 +375,18 @@ impl CgsWindow {
         }
     }
 
-    pub fn set_shape_regions(
-        &self,
-        origin: CGPoint,
-        rects: &[CGRect],
-    ) -> Result<(), CgsWindowError> {
-        let region = CFRegion::from_rects(rects).map_err(CgsWindowError::Region)?;
-        unsafe {
-            cg_ok(SLSSetWindowShape(
-                self.connection,
-                self.id,
-                origin.x as f32,
-                origin.y as f32,
-                region.as_ptr(),
-            ))
-        }
-        .map_err(CgsWindowError::Shape)
+    pub fn move_with_group(&self, origin: CGPoint) -> Result<(), CgsWindowError> {
+        self.motion_handle().move_with_group(origin)
     }
 
-    pub fn move_to(&self, origin: CGPoint) -> Result<(), CgsWindowError> {
-        unsafe { cg_ok(SLSMoveWindow(self.connection, self.id, &origin)) }
-            .map_err(CgsWindowError::Shape)
-    }
-
-    pub fn add_to_movement_group(&self, target: WindowId) -> Result<(), CgsWindowError> {
-        unsafe {
-            cg_ok(SLSAddWindowToWindowMovementGroup(
-                self.connection,
-                target,
-                self.id,
-            ))
-        }
-        .map_err(CgsWindowError::MovementGroup)?;
-        self.verify_window_group_membership(target, WindowGroupKind::Movement)
-            .then_some(())
-            .ok_or(CgsWindowError::MovementGroup(CGError(1000)))
-    }
-
-    pub fn add_to_ordering_group(&self, target: WindowId) -> Result<(), CgsWindowError> {
-        unsafe {
-            cg_ok(SLSAddWindowToWindowOrderingGroup(
-                self.connection,
-                target,
-                self.id,
-            ))
-        }
-        .map_err(CgsWindowError::OrderingGroup)?;
-        self.verify_window_group_membership(target, WindowGroupKind::Ordering)
-            .then_some(())
-            .ok_or(CgsWindowError::OrderingGroup(CGError(1000)))
-    }
-
-    fn verify_window_group_membership(&self, target: WindowId, kind: WindowGroupKind) -> bool {
-        let group_type = CFString::from_static_str(kind.name());
-        let mut windows = ptr::null_mut();
-        let mut window_count = 0;
-        unsafe {
-            SLSCopyWindowGroup(
-                self.connection,
-                target,
-                CFRetained::as_ptr(&group_type).as_ptr(),
-                &mut windows,
-                &mut window_count,
-            );
-        }
-        let Some(windows) = NonNull::new(windows) else {
-            return false;
-        };
-        let windows: CFRetained<CFArray<CFNumber>> = unsafe { CFRetained::from_raw(windows) };
-        window_count > 0
-            && windows
-                .iter()
-                .filter_map(|number| number.as_i64())
-                .any(|window| u32::try_from(window).ok() == Some(self.id))
-    }
-
-    pub fn sync_above(
+    pub fn sync_below(
         &self,
         target: WindowId,
         origin: CGPoint,
         level: i32,
         sub_level: i32,
     ) -> Result<(), CgsWindowError> {
-        let transaction = NonNull::new(unsafe { SLSTransactionCreate(self.connection) })
-            .ok_or(CgsWindowError::Transaction(CGError(1000)))?;
-        let transaction = unsafe { CFRetained::<CFType>::from_raw(transaction) };
+        let transaction = create_transaction(self.connection)?;
         let ptr = CFRetained::as_ptr(&transaction).as_ptr();
         let transform = CGAffineTransform {
             a: 1.0,
@@ -475,26 +401,24 @@ impl CgsWindow {
             SLSTransactionSetWindowTransform(ptr, self.id, 0, 0, transform);
             SLSTransactionSetWindowLevel(ptr, self.id, level);
             SLSTransactionSetWindowSubLevel(ptr, self.id, sub_level);
-            SLSTransactionOrderWindow(ptr, self.id, 1, target);
+            SLSTransactionOrderWindow(ptr, self.id, -1, target);
             SLSTransactionCommit(ptr, 0);
         }
         Ok(())
     }
 
-    pub fn sync_order_above(
+    pub fn sync_order_below(
         &self,
         target: WindowId,
         level: i32,
         sub_level: i32,
     ) -> Result<(), CgsWindowError> {
-        let transaction = NonNull::new(unsafe { SLSTransactionCreate(self.connection) })
-            .ok_or(CgsWindowError::Transaction(CGError(1000)))?;
-        let transaction = unsafe { CFRetained::<CFType>::from_raw(transaction) };
+        let transaction = create_transaction(self.connection)?;
         let ptr = CFRetained::as_ptr(&transaction).as_ptr();
         unsafe {
             SLSTransactionSetWindowLevel(ptr, self.id, level);
             SLSTransactionSetWindowSubLevel(ptr, self.id, sub_level);
-            SLSTransactionOrderWindow(ptr, self.id, 1, target);
+            SLSTransactionOrderWindow(ptr, self.id, -1, target);
             SLSTransactionCommit(ptr, 0);
         }
         Ok(())

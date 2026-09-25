@@ -205,6 +205,7 @@ Enable it in System Settings > Desktop & Dock (Mission Control) and restart Rift
     let (input_tx, input_rx) = rift_wm::actor::channel();
     let (menu_tx, menu_rx) = rift_wm::actor::channel();
     let (border_tx, border_rx) = rift_wm::actor::channel();
+    let border_motion = rift_wm::actor::border::BorderMotionHandle::default();
     let (command_palette_tx, command_palette_rx) = rift_wm::actor::channel();
     let (stack_line_tx, stack_line_rx) = rift_wm::actor::channel();
     let (wnd_tx, wnd_rx) = rift_wm::actor::channel();
@@ -307,11 +308,11 @@ Enable it in System Settings > Desktop & Dock (Mission Control) and restart Rift
             CGSEventType::Known(KnownCGSEvent::WindowManagerGlobalFrontConnectionChanged),
             CGSEventType::Known(KnownCGSEvent::SpaceCreated),
             CGSEventType::Known(KnownCGSEvent::SpaceDestroyed),
-            //CGSEventType::Known(KnownCGSEvent::WindowMoved),
-            //CGSEventType::Known(KnownCGSEvent::WindowResized),
+            CGSEventType::Known(KnownCGSEvent::WindowMoved),
+            CGSEventType::Known(KnownCGSEvent::WindowResized),
         ],
-        Some(window_tx_store.clone()),
         border_tx.clone(),
+        border_motion.clone(),
     );
 
     let notification_center =
@@ -327,7 +328,7 @@ Enable it in System Settings > Desktop & Dock (Mission Control) and restart Rift
         config_tx.clone(),
         mtm,
     );
-    let border = Border::new(config.clone(), border_rx, mtm);
+    let border = Border::new(config.clone(), border_rx, border_motion, mtm);
     let command_palette = CommandPalette::new(
         config.clone(),
         command_palette_rx,

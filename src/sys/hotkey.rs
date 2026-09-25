@@ -6,9 +6,15 @@ use std::str::FromStr;
 use std::sync::LazyLock;
 
 use anyhow::anyhow;
+#[cfg(not(test))]
+use dispatchr::queue;
+#[cfg(not(test))]
+use objc2::MainThreadMarker;
 use objc2_core_foundation::CFData;
 use objc2_core_graphics::{CGEvent, CGEventField, CGEventFlags};
 use parking_lot::Mutex;
+#[cfg(not(test))]
+use parking_lot::RwLock;
 use serde::{Deserialize, Serialize};
 
 #[derive(Serialize, Deserialize, Debug, Copy, Clone, PartialEq, Eq, Hash)]
@@ -1201,7 +1207,7 @@ const VIRTUAL_KEYCODE_NUMS: &[u16] = &[
 ];
 
 #[cfg(target_os = "macos")]
-fn generate_virtual_keymap() -> StdHashMap<String, KeyCode> {
+fn generate_virtual_keymap_on_main_thread() -> StdHashMap<String, KeyCode> {
     static KEYMAP_GENERATION_LOCK: LazyLock<Mutex<()>> = LazyLock::new(|| Mutex::new(()));
     let _guard = KEYMAP_GENERATION_LOCK.lock();
     let mut keymap = StdHashMap::new();
@@ -1275,6 +1281,48 @@ fn generate_virtual_keymap() -> StdHashMap<String, KeyCode> {
     keymap
 }
 
+#[cfg(all(target_os = "macos", not(test)))]
+fn generate_virtual_keymap() -> StdHashMap<String, KeyCode> {
+    // HIToolbox asserts main-queue affinity on macOS 27. Config and input
+    // actors therefore dispatch layout reads instead of calling TIS directly.
+    if MainThreadMarker::new().is_some() {
+        generate_virtual_keymap_on_main_thread()
+    } else {
+        queue::main().sync_ret(generate_virtual_keymap_on_main_thread)
+    }
+}
+
+#[cfg(all(target_os = "macos", test))]
+fn generate_virtual_keymap() -> StdHashMap<String, KeyCode> {
+    generate_virtual_keymap_on_main_thread()
+}
+
+#[cfg(not(test))]
+static VIRTUAL_KEYMAP: LazyLock<RwLock<Option<StdHashMap<String, KeyCode>>>> =
+    LazyLock::new(|| RwLock::new(None));
+
+#[cfg(not(test))]
+pub fn refresh_virtual_keymap() { *VIRTUAL_KEYMAP.write() = Some(generate_virtual_keymap()); }
+
+#[cfg(test)]
+pub fn refresh_virtual_keymap() {}
+
+#[cfg(not(test))]
+pub fn keycode_from_char(ch: &str) -> Option<KeyCode> {
+    let normalized = ch.to_lowercase();
+    if let Some(key_code) =
+        VIRTUAL_KEYMAP.read().as_ref().and_then(|map| map.get(&normalized)).copied()
+    {
+        return Some(key_code);
+    }
+
+    let keymap = generate_virtual_keymap();
+    let key_code = keymap.get(&normalized).copied();
+    *VIRTUAL_KEYMAP.write() = Some(keymap);
+    key_code.or_else(|| fallback_keycode_from_char(ch))
+}
+
+#[cfg(test)]
 pub fn keycode_from_char(ch: &str) -> Option<KeyCode> {
     generate_virtual_keymap()
         .get(&ch.to_lowercase())
