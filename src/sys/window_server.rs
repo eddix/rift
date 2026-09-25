@@ -1,6 +1,6 @@
 #[cfg(test)]
 use std::cell::RefCell;
-use std::ffi::{CStr, c_int};
+use std::ffi::{CStr, c_int, c_void};
 use std::num::NonZeroU32;
 use std::ptr::NonNull;
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -135,6 +135,19 @@ pub struct WindowIterator {
     iter: *mut CFType,
 }
 
+type WindowIteratorGetCornerRadii = unsafe extern "C" fn(*mut CFType) -> *mut CFArray<CFNumber>;
+
+static WINDOW_ITERATOR_GET_CORNER_RADII: Lazy<Option<WindowIteratorGetCornerRadii>> =
+    Lazy::new(|| {
+        let symbol = unsafe { dlsym(RTLD_DEFAULT, c"SLSWindowIteratorGetCornerRadii".as_ptr()) };
+        if symbol.is_null() {
+            return None;
+        }
+        // SAFETY: SkyLight exports this symbol with the signature used by
+        // JankyBorders on macOS 26 and newer. A missing symbol is handled above.
+        Some(unsafe { std::mem::transmute::<*mut c_void, WindowIteratorGetCornerRadii>(symbol) })
+    });
+
 impl WindowIterator {
     pub fn new(ids: &[WindowServerId]) -> Option<Self> {
         if ids.is_empty() {
@@ -199,6 +212,14 @@ impl WindowIterator {
     #[inline]
     pub fn alpha(&self) -> f32 { unsafe { SLSWindowIteratorGetAlpha(self.iter) } }
 
+    pub fn corner_radius(&self) -> Option<f64> {
+        let get_corner_radii = (*WINDOW_ITERATOR_GET_CORNER_RADII)?;
+        let radii = NonNull::new(unsafe { get_corner_radii(self.iter) })?;
+        let radii = unsafe { CFRetained::from_raw(radii) };
+        let radius = radii.iter().next()?.as_f64()?;
+        validate_corner_radius(radius)
+    }
+
     #[inline]
     #[allow(dead_code)]
     pub fn tags(&self) -> u64 { unsafe { SLSWindowIteratorGetTags(self.iter) } }
@@ -239,6 +260,10 @@ pub fn window_title(id: WindowServerId) -> Option<(i32, String)> {
     }
     let title = NonNull::new(unsafe { SLSWindowIteratorCopyTitle(query.iter) })?;
     Some((query.pid(), unsafe { CFRetained::from_raw(title) }.to_string()))
+}
+
+fn validate_corner_radius(radius: f64) -> Option<f64> {
+    (radius.is_finite() && radius > 0.0 && radius <= 64.0).then_some(radius)
 }
 
 impl Drop for WindowIterator {
@@ -372,6 +397,8 @@ pub struct WindowServerInfo {
     pub min_frame: CGSize,
     #[serde(with = "CGSizeDef")]
     pub max_frame: CGSize,
+    #[serde(default)]
+    pub corner_radius: Option<f64>,
 }
 
 /// Global CG on-screen window snapshot.
@@ -526,6 +553,7 @@ pub fn get_windows(ids: &[WindowServerId]) -> Vec<WindowServerInfo> {
             frame: CGRect::new(CGPoint::new(0.0, 0.0), CGSize::new(800.0, 600.0)),
             min_frame: CGSize::ZERO,
             max_frame: CGSize::ZERO,
+            corner_radius: None,
         })
         .collect()
 }
@@ -559,6 +587,17 @@ pub fn get_window(id: WindowServerId) -> Option<WindowServerInfo> {
         }
         return window_info_from_query(&query);
     }
+}
+
+#[cfg(test)]
+pub fn get_window_bounds(id: WindowServerId) -> Option<CGRect> {
+    get_window(id).map(|window| window.frame)
+}
+
+#[cfg(not(test))]
+pub fn get_window_bounds(id: WindowServerId) -> Option<CGRect> {
+    let mut frame = CGRect::default();
+    (unsafe { CGSGetWindowBounds(*G_CONNECTION, id.as_u32(), &mut frame) } == 0).then_some(frame)
 }
 
 fn get_num(dict: &CFDictionary<CFString, CFType>, key: &'static CFString) -> Option<i64> {
@@ -618,6 +657,7 @@ fn window_info_from_query(query: &WindowIterator) -> Option<WindowServerInfo> {
         frame: query.bounds(),
         min_frame,
         max_frame,
+        corner_radius: query.corner_radius(),
     })
 }
 
@@ -1006,12 +1046,25 @@ pub unsafe fn switch_space(direction: crate::layout_engine::Direction) {
 
 #[cfg(test)]
 mod tests {
-    use super::WindowServerId;
+    use super::{WindowServerId, validate_corner_radius};
 
     #[test]
     fn zero_window_server_id_is_not_a_window_id() {
         assert!(WindowServerId::new(0).as_nonzero().is_none());
         assert_eq!(WindowServerId::new(42).as_nonzero().map(|id| id.get()), Some(42));
+    }
+
+    #[test]
+    fn corner_radius_validation_accepts_only_sane_positive_values() {
+        assert_eq!(
+            [
+                validate_corner_radius(13.0),
+                validate_corner_radius(0.0),
+                validate_corner_radius(f64::NAN),
+                validate_corner_radius(65.0),
+            ],
+            [Some(13.0), None, None, None]
+        );
     }
 }
 

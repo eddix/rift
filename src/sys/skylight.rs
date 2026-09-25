@@ -526,7 +526,6 @@ unsafe extern "C" {
         region: *mut CFType,
         out_wid: *mut u32,
     ) -> CGError;
-    pub fn SLSMoveWindow(cid: cid_t, wid: u32, origin: *const CGPoint) -> CGError;
     pub fn SLSMoveWindowsToManagedSpace(cid: cid_t, windows: *mut CFArray<CFNumber>, sid: u64);
     pub fn SLSSetWindowResolution(cid: cid_t, wid: u32, resolution: f64) -> CGError;
     pub fn SLSSetWindowAlpha(cid: cid_t, wid: u32, alpha: f32) -> CGError;
@@ -550,15 +549,6 @@ unsafe extern "C" {
     pub fn SLSOrderWindow(cid: cid_t, wid: u32, order: c_int, relative_to: u32) -> CGError;
     pub fn SLSSetWindowTags(cid: cid_t, wid: u32, tags: *mut u64, tag_count: c_int) -> CGError;
     pub fn SLSClearWindowTags(cid: cid_t, wid: u32, tags: *mut u64, tag_count: c_int) -> CGError;
-    pub fn SLSAddWindowToWindowMovementGroup(cid: cid_t, parent: u32, child: u32) -> CGError;
-    pub fn SLSAddWindowToWindowOrderingGroup(cid: cid_t, parent: u32, child: u32) -> CGError;
-    pub fn SLSCopyWindowGroup(
-        cid: cid_t,
-        wid: u32,
-        group_type: *mut CFString,
-        windows: *mut *mut CFArray<CFNumber>,
-        window_count: *mut usize,
-    );
     pub fn SLSTransactionCreate(cid: cid_t) -> *mut CFType;
     pub fn SLSTransactionMoveWindowWithGroup(transaction: *mut CFType, wid: u32, origin: CGPoint);
     pub fn SLSTransactionSetWindowTransform(
@@ -585,7 +575,6 @@ unsafe extern "C" {
         rect_count: c_int,
         region: *mut *mut CFType,
     ) -> CGError;
-    pub fn CGRegionCreateWithRects(rects: *const CGRect, count: usize) -> *mut CFType;
     pub fn CGRegionCreateEmptyRegion() -> *mut CFType;
     pub fn SLWindowContextCreate(cid: cid_t, wid: u32, options: *mut CFType) -> *mut CGContext;
 
@@ -615,7 +604,6 @@ unsafe extern "C" {
         order: c_int,
         relative_to: u32,
     ) -> CGError;
-    pub fn SLSTransactionCreate(cid: cid_t) -> *mut CFType;
     pub fn SLSTransactionSetWindowShape(
         transaction: *mut CFType,
         wid: u32,
@@ -623,14 +611,12 @@ unsafe extern "C" {
         y_offset: f32,
         shape: *mut CFType,
     );
-    pub fn SLSTransactionMoveWindowWithGroup(transaction: *mut CFType, wid: u32, point: CGPoint);
     pub fn SLSTransactionSetSurfaceBounds(
         transaction: *mut CFType,
         wid: u32,
         sid: u32,
         bounds: CGRect,
     );
-    pub fn SLSTransactionCommit(transaction: *mut CFType, asynchronous: u32);
     pub fn SLSSetWindowProperty(
         cid: cid_t,
         wid: u32,

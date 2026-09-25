@@ -991,6 +991,111 @@ fn reconnecting_affinity_display_moves_existing_managed_window_back() {
 }
 
 #[test]
+fn lifecycle_release_reapplies_fixed_rule_after_delayed_post_reconnect_reassignment() {
+    let mut settings = crate::common::config::VirtualWorkspaceSettings::default();
+    settings.app_rules = vec![AppWorkspaceRule {
+        app_id: Some("com.testapp1".to_string()),
+        workspace: Some(WorkspaceSelector::Index(0)),
+        ..Default::default()
+    }];
+    settings.workspace_display_rules = vec![WorkspaceDisplayRule {
+        workspace: WorkspaceSelector::Index(0),
+        display: WorkspaceDisplayTarget::BuiltIn,
+    }];
+    let mut apps = Apps::new();
+    let mut reactor = test_reactor_with_workspace_settings(&settings);
+    reactor.config.virtual_workspaces = settings;
+    let builtin = CGRect::new(CGPoint::new(0., 0.), CGSize::new(1000., 1000.));
+    let external = CGRect::new(CGPoint::new(1000., 0.), CGSize::new(1000., 1000.));
+    let builtin_space = SpaceId::new(1);
+    let external_space = SpaceId::new(2);
+    reactor.handle_event(space_state_event(vec![builtin, external], vec![
+        Some(builtin_space),
+        Some(external_space),
+    ]));
+    apps.make_app_and_settle(&mut reactor, 1, make_windows(1));
+    let window = WindowId::new(1, 1);
+    let window_server_id = reactor.test_window_server_id(window);
+
+    reactor.handle_event(Event::SessionDidResignActive);
+    reactor.handle_event(Event::SessionDidBecomeActive);
+    reactor.handle_event(Event::DisplayChurnBegin);
+    reactor.handle_event(space_state_event_with(
+        vec![builtin, external],
+        vec![Some(builtin_space), Some(external_space)],
+        |state| {
+            state.display_set_changed = true;
+            state.topology_changed = true;
+            state.should_force_refresh_layout = true;
+            state.topology_window_delta = Some(crate::actor::spaces::TopologyWindowDelta {
+                epoch: 1,
+                flags: crate::sys::skylight::DisplayReconfigFlags::ADD,
+                appeared: vec![(window_server_id, external_space)],
+                disappeared: vec![(window_server_id, builtin_space)],
+            });
+            state.active_window_spaces.insert(window_server_id, external_space);
+        },
+    ));
+
+    reactor.handle_event(space_state_event_with(
+        vec![builtin, external],
+        vec![Some(builtin_space), Some(external_space)],
+        |state| {
+            state.releases_lifecycle_refresh_quarantine = true;
+            state.active_window_spaces.insert(window_server_id, external_space);
+        },
+    ));
+
+    assert_eq!(
+        (
+            reactor.assigned_space_for_window_id(window),
+            reactor.test_workspace_for_window(builtin_space, window),
+        ),
+        (
+            Some(builtin_space),
+            Some(reactor.test_workspace(builtin_space, 0)),
+        )
+    );
+}
+
+#[test]
+fn lifecycle_release_without_topology_change_preserves_manual_workspace_assignment() {
+    let mut settings = crate::common::config::VirtualWorkspaceSettings::default();
+    settings.app_rules = vec![AppWorkspaceRule {
+        app_id: Some("com.testapp1".to_string()),
+        workspace: Some(WorkspaceSelector::Index(0)),
+        ..Default::default()
+    }];
+    let mut apps = Apps::new();
+    let mut reactor = test_reactor_with_workspace_settings(&settings);
+    reactor.config.virtual_workspaces = settings;
+    let screen = CGRect::new(CGPoint::new(0., 0.), CGSize::new(1000., 1000.));
+    let space = SpaceId::new(1);
+    reactor.handle_event(space_state_event(vec![screen], vec![Some(space)]));
+    apps.make_app_and_settle(&mut reactor, 1, make_windows(1));
+    let window = WindowId::new(1, 1);
+    let window_server_id = reactor.test_window_server_id(window);
+    let manual_workspace = reactor.test_workspace(space, 1);
+    assert!(reactor.assign_test_window_to_workspace(space, window, manual_workspace));
+
+    reactor.handle_event(Event::SessionDidResignActive);
+    reactor.handle_event(Event::SessionDidBecomeActive);
+    reactor.handle_event(space_state_event_with(
+        vec![screen],
+        vec![Some(space)],
+        |state| {
+            state.releases_lifecycle_refresh_quarantine = true;
+            state.active_window_spaces.insert(window_server_id, space);
+        },
+    ));
+
+    assert_eq!(
+        reactor.test_workspace_for_window(space, window),
+        Some(manual_workspace)
+    );
+}
+
+#[test]
 fn next_workspace_skips_workspaces_affined_to_other_displays() {
     let mut reactor = test_reactor();
     reactor.config.virtual_workspaces.workspace_display_rules = vec![
@@ -1499,6 +1604,7 @@ fn discovery_with_new_window_does_not_replay_old_focus() {
         frame: screen,
         min_frame: CGSize::ZERO,
         max_frame: CGSize::ZERO,
+        corner_radius: None,
     });
     reactor.mark_test_window_visible_in_space(newest_wsid, space);
     reactor.handle_event(Event::ApplicationMainWindowChanged(1, Some(newest), Quiet::No));
@@ -1560,7 +1666,7 @@ fn queries_prefer_authoritative_active_space_over_stale_command_space() {
 }
 
 #[test]
-fn menu_bar_update_groups_visible_displays_and_keeps_command_topology_scoped() {
+fn menu_bar_snapshot_groups_visible_displays_and_keeps_command_topology_scoped() {
     let mut reactor = test_reactor();
     let left = CGRect::new(CGPoint::new(0., 0.), CGSize::new(1000., 1000.));
     let right = CGRect::new(CGPoint::new(1000., 0.), CGSize::new(1000., 1000.));
@@ -1574,49 +1680,62 @@ fn menu_bar_update_groups_visible_displays_and_keeps_command_topology_scoped() {
     reactor.handle_test_workspace_command(space1, &LayoutCommand::SwitchToWorkspace(0));
     reactor.handle_test_workspace_command(space2, &LayoutCommand::SwitchToWorkspace(1));
     let (tx, mut rx) = crate::actor::channel();
-    reactor.menu_manager.menu_tx = Some(tx);
+    reactor.presentation_manager.menu_tx = Some(tx);
 
     for context in [space1, space2] {
         reactor.space_state.menu_bar_space = Some(context);
-        reactor.maybe_send_menu_update();
-        let (_, menu_bar::Event::Update(update)) = rx.try_recv().unwrap() else {
-            panic!("expected menu update")
+        reactor.presentation_manager.projections.mark_dirty();
+        reactor.publish_desktop_snapshot();
+        let (_, menu_bar::Event::Snapshot(snapshot)) = rx.try_recv().unwrap() else {
+            panic!("expected menu snapshot")
         };
         assert_eq!(
-            update.displays.iter().map(|display| display.space).collect::<Vec<_>>(),
+            snapshot
+                .state
+                .menu_bar_displays
+                .iter()
+                .map(|display| display.space)
+                .collect::<Vec<_>>(),
             [space1, space2]
         );
         assert_eq!(
-            update.displays[0].workspaces.iter().position(|ws| ws.is_active),
+            snapshot.state.menu_bar_displays[0]
+                .workspaces
+                .iter()
+                .position(|ws| ws.is_active),
             Some(0)
         );
         assert_eq!(
-            update.displays[1].workspaces.iter().position(|ws| ws.is_active),
+            snapshot.state.menu_bar_displays[1]
+                .workspaces
+                .iter()
+                .position(|ws| ws.is_active),
             Some(1)
         );
         let expected = reactor.query_workspaces(Some(context));
+        let projected = snapshot.state.menu_bar_context.as_ref().unwrap();
         assert_eq!(
-            update
-                .context_workspaces()
-                .iter()
-                .map(|ws| (&ws.id, ws.index))
-                .collect::<Vec<_>>(),
+            projected.workspaces.iter().map(|ws| (&ws.id, ws.index)).collect::<Vec<_>>(),
             expected.iter().map(|ws| (&ws.id, ws.index)).collect::<Vec<_>>()
         );
     }
+
     reactor.space_state.screens.retain(|screen| screen.space == Some(space1));
-    reactor.maybe_send_menu_update();
-    let (_, menu_bar::Event::Update(update)) = rx.try_recv().unwrap() else {
-        panic!("expected menu update")
+    reactor.presentation_manager.projections.mark_dirty();
+    reactor.publish_desktop_snapshot();
+    let (_, menu_bar::Event::Snapshot(snapshot)) = rx.try_recv().unwrap() else {
+        panic!("expected menu snapshot")
     };
-    assert_eq!(update.displays.len(), 1);
-    assert!(update.displays[0].is_active_context);
+    assert_eq!(snapshot.state.menu_bar_displays.len(), 1);
+    assert!(snapshot.state.menu_bar_displays[0].is_active_context);
+
     reactor.space_state.screens.clear();
-    reactor.maybe_send_menu_update();
-    let (_, menu_bar::Event::Update(update)) = rx.try_recv().unwrap() else {
-        panic!("expected menu update")
+    reactor.presentation_manager.projections.mark_dirty();
+    reactor.publish_desktop_snapshot();
+    let (_, menu_bar::Event::Snapshot(snapshot)) = rx.try_recv().unwrap() else {
+        panic!("expected menu snapshot")
     };
-    assert!(update.displays.is_empty());
+    assert!(snapshot.state.menu_bar_displays.is_empty());
 }
 
 #[test]
@@ -3021,6 +3140,7 @@ fn fullscreen_does_not_suppress_other_same_pid_windows() {
             frame,
             min_frame: frame.size,
             max_frame: frame.size,
+            corner_radius: None,
         }),
         None,
     ));
@@ -3951,6 +4071,7 @@ fn native_focus_race_waits_for_new_window_activation() {
         frame,
         min_frame: CGSize::ZERO,
         max_frame: CGSize::ZERO,
+        corner_radius: None,
     };
 
     reactor.handle_event(space_state_event(vec![frame], vec![Some(space)]));
@@ -4029,6 +4150,7 @@ fn pending_activation_context() -> (Apps, Reactor, SpaceId, WindowId, WindowServ
         frame,
         min_frame: CGSize::ZERO,
         max_frame: CGSize::ZERO,
+        corner_radius: None,
     };
     (apps, reactor, space, main, info)
 }
@@ -4309,6 +4431,7 @@ fn mouse_hit_missing_from_inventory_refreshes_its_owner_once() {
         frame: CGRect::new(CGPoint::ZERO, CGSize::new(800.0, 600.0)),
         min_frame: CGSize::ZERO,
         max_frame: CGSize::ZERO,
+        corner_radius: None,
     });
     reactor.handle_event(Event::MouseMoved(wsid));
     assert!(matches!(

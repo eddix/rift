@@ -343,7 +343,6 @@ impl WmController {
                         self.config.config.clone(),
                     )));
                 }
-
             }
             PowerStateChanged(is_low_power_mode) => {
                 info!("Power state changed: low power mode = {}", is_low_power_mode);
