@@ -2527,6 +2527,42 @@ fn duplicate_minimize_deminimize_and_unknown_window_events_do_not_arrange() {
 }
 
 #[test]
+fn minimize_invalidates_border_before_publishing_the_committed_snapshot() {
+    let (mut apps, mut reactor) = test_context();
+    let space = SpaceId::new(1);
+    let screen = CGRect::new(CGPoint::new(0., 0.), CGSize::new(1000., 1000.));
+    let wid = WindowId::new(1, 1);
+
+    reactor.handle_event(space_state_event(vec![screen], vec![Some(space)]));
+    reactor.handle_event(Event::ApplicationGloballyActivated(1));
+    reactor.handle_events(apps.make_app_with_opts(1, make_windows(1), Some(wid), true, true));
+    apps.simulate_until_quiet(&mut reactor);
+    let wsid = reactor.state.windows.window(wid).unwrap().info.sys_id.unwrap();
+
+    let (border_tx, mut border_rx) = actor::channel();
+    reactor.presentation_manager.border_tx = Some(border_tx);
+
+    reactor.handle_event(Event::WindowMinimized(wid));
+
+    let mut invalidated = false;
+    while let Ok((_, event)) = border_rx.try_recv() {
+        match event {
+            border::Event::TargetInvalidated(window) => {
+                assert_eq!(window, wsid);
+                invalidated = true;
+            }
+            border::Event::Snapshot(snapshot) => {
+                assert!(invalidated, "snapshot must follow eager border invalidation");
+                assert!(snapshot.state.border_target.is_none());
+                return;
+            }
+            _ => {}
+        }
+    }
+    panic!("expected eager invalidation and committed desktop snapshot");
+}
+
+#[test]
 fn cross_display_drag_clears_source_floating_position() {
     let (mut reactor, wid, _wsid, space1, space2, initial_frame, screen2) =
         reactor_with_window_on_space1_two_displays();

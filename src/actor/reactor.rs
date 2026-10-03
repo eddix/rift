@@ -1697,6 +1697,16 @@ impl Reactor {
                 );
             }
             Event::WindowMinimized(wid) => {
+                if let Some(window_server_id) = self
+                    .state
+                    .windows
+                    .window(wid)
+                    .filter(|window| !window.info.is_minimized)
+                    .and_then(|window| window.info.sys_id)
+                    && let Some(border_tx) = self.presentation_manager.border_tx.as_ref()
+                {
+                    border_tx.send(border::Event::TargetInvalidated(window_server_id));
+                }
                 return window_workflow::handle_window_minimized(&mut self.state, wid);
             }
             Event::WindowDeminiaturized(wid) => {
