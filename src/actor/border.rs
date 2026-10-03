@@ -19,6 +19,7 @@ pub enum Event {
     Snapshot(Arc<DesktopSnapshot>),
     ConfigUpdated(Box<Config>),
     OrderInvalidated(WindowServerId),
+    TargetInvalidated(WindowServerId),
     FrameChanged(WindowServerId, CGRect),
 }
 
@@ -31,6 +32,7 @@ pub struct Border {
     last_snapshot: Option<Arc<DesktopSnapshot>>,
     last_applied_revision: Option<StateRevision>,
     live_frame: Option<(WindowServerId, CGRect)>,
+    invalidated_target: Option<WindowServerId>,
 }
 
 pub type Sender = actor::Sender<Event>;
@@ -91,6 +93,7 @@ impl Border {
             last_snapshot: None,
             last_applied_revision: None,
             live_frame: None,
+            invalidated_target: None,
         }
     }
 
@@ -129,6 +132,11 @@ impl Border {
                 self.flush_pending_updates(pending_snapshot, pending_frames);
                 let _guard = span.enter();
                 self.handle_order_invalidated(window);
+            }
+            Event::TargetInvalidated(window) => {
+                self.flush_pending_updates(pending_snapshot, pending_frames);
+                let _guard = span.enter();
+                self.handle_target_invalidated(window);
             }
         }
     }
@@ -170,6 +178,8 @@ impl Border {
         }
         self.last_applied_revision = Some(snapshot.revision);
         let snapshot_target = snapshot.state.border_target.map(|target| target.window_server_id);
+        self.invalidated_target =
+            reconcile_invalidated_target(self.invalidated_target, snapshot_target);
         if self.live_frame.map(|(window, _)| window) != snapshot_target {
             self.live_frame = None;
         }
@@ -215,6 +225,20 @@ impl Border {
         self.sync_surface();
     }
 
+    fn handle_target_invalidated(&mut self, window: WindowServerId) {
+        let targets_window = self
+            .last_snapshot
+            .as_ref()
+            .and_then(|snapshot| snapshot.state.border_target)
+            .is_some_and(|target| target.window_server_id == window);
+        if !targets_window {
+            return;
+        }
+        self.invalidated_target = Some(window);
+        self.live_frame = None;
+        self.clear_surface();
+    }
+
     fn clear_surface(&mut self) {
         self.motion.clear();
         self.surface = None;
@@ -237,6 +261,8 @@ impl Border {
                 .then_some(snapshot.state.border_target)
                 .flatten()
         });
+        let target =
+            target.filter(|target| Some(target.window_server_id) != self.invalidated_target);
         let target = target.map(|target| target_with_live_frame(target, self.live_frame));
         let displays = self
             .last_snapshot
@@ -282,6 +308,13 @@ impl Border {
             Err(error) => warn!(?error, "failed to create focused-window border"),
         }
     }
+}
+
+fn reconcile_invalidated_target(
+    invalidated_target: Option<WindowServerId>,
+    snapshot_target: Option<WindowServerId>,
+) -> Option<WindowServerId> {
+    invalidated_target.filter(|target| Some(*target) == snapshot_target)
 }
 
 impl Drop for Border {
@@ -373,6 +406,21 @@ mod tests {
                 Ok(false)
             ),
             "an unregistered motion handle must not issue a WindowServer transaction"
+        );
+    }
+
+    #[test]
+    fn invalidated_target_stays_suppressed_until_snapshot_moves_away() {
+        let invalidated = WindowServerId::new(7);
+
+        assert_eq!(
+            reconcile_invalidated_target(Some(invalidated), Some(invalidated)),
+            Some(invalidated)
+        );
+        assert_eq!(reconcile_invalidated_target(Some(invalidated), None), None);
+        assert_eq!(
+            reconcile_invalidated_target(Some(invalidated), Some(WindowServerId::new(8))),
+            None
         );
     }
 
