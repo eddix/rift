@@ -183,6 +183,8 @@ enum ExecuteCommands {
     Debug,
     /// Serialize and print runtime state
     Serialize,
+    /// Rebalance every traditional workspace on every connected display
+    RebalanceAllWorkspaces,
     /// this command is deprecated, use `rift-cli execute space toggle-activated`
     #[deprecated]
     ToggleSpaceActivated,
@@ -760,6 +762,9 @@ fn build_execute_request(execute: ExecuteCommands) -> Result<RiftRequest, String
         ExecuteCommands::Serialize => {
             CliCommand::Reactor(reactor::Command::Reactor(reactor::ReactorCommand::Serialize))
         }
+        ExecuteCommands::RebalanceAllWorkspaces => CliCommand::Reactor(reactor::Command::Reactor(
+            reactor::ReactorCommand::RebalanceAllWorkspaces,
+        )),
         #[allow(deprecated)]
         ExecuteCommands::ToggleSpaceActivated => {
             eprintln!("this command is deprecated, use rift-cli execute space toggle-activated");
@@ -1349,6 +1354,20 @@ mod tests {
             serde_json::json!({
                 "execute_command": {
                     "command": { "reactor": "toggle_command_palette_commands" }
+                }
+            })
+        );
+    }
+
+    #[test]
+    fn rebalance_all_workspaces_cli_uses_typed_reactor_command() {
+        let request = build_execute_request(ExecuteCommands::RebalanceAllWorkspaces).unwrap();
+
+        assert_eq!(
+            serde_json::to_value(request).unwrap(),
+            serde_json::json!({
+                "execute_command": {
+                    "command": { "reactor": "rebalance_all_workspaces" }
                 }
             })
         );

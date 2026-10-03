@@ -387,6 +387,11 @@ impl CommandPalette {
                     ReactorCommand::FocusDisplay(DisplaySelector::Uuid(uuid)),
                 )));
             }
+            PaletteAction::RebalanceAllWorkspaces => {
+                let _ = self.reactor.try_send(reactor::Event::Command(ReactorTopCommand::Reactor(
+                    ReactorCommand::RebalanceAllWorkspaces,
+                )));
+            }
             PaletteAction::ReloadConfig => {
                 self.wm.send(WmEvent::Command(WmCommand::Wm(WmCmd::ReloadConfig)))
             }

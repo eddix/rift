@@ -2202,6 +2202,21 @@ impl Reactor {
                 let serialized = self.serialize_state();
                 return command_workflow::handle_command_reactor_serialize(serialized);
             }
+            Event::Command(Command::Reactor(ReactorCommand::RebalanceAllWorkspaces)) => {
+                let spaces = self
+                    .space_state
+                    .screens
+                    .iter()
+                    .filter_map(|screen| screen.space)
+                    .collect::<Vec<_>>();
+                let report = self.layout_manager.layout_engine.rebalance_all_workspaces(&spaces);
+                let outcome = if report.configurations == 0 {
+                    EventOutcome::no_change()
+                } else {
+                    EventOutcome::layout_changed(false)
+                };
+                return Ok(outcome.with_stdout_line(report.summary()));
+            }
             Event::Command(Command::Reactor(ReactorCommand::SwitchSpace(direction))) => {
                 return command_workflow::handle_switch_native_space(direction);
             }

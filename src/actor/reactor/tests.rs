@@ -7,7 +7,7 @@ use crate::actor::app::{AppThreadHandle, Request, pid_t};
 use crate::actor::wm_controller::WmEvent;
 use crate::common::config::{
     AppWorkspaceRule, LayoutMode, OuterGaps, WorkspaceDisplayRule, WorkspaceDisplayTarget,
-    WorkspaceSelector,
+    WorkspaceLayoutRule, WorkspaceSelector,
 };
 use crate::layout_engine::{Direction, LayoutCommand, LayoutEvent};
 use crate::model::window_store::NativeFullscreenTransition;
@@ -185,6 +185,10 @@ fn command_palette_query_exposes_only_leaf_commands() {
             entry.action,
             crate::model::command_palette::PaletteAction::SwitchWorkspace(1)
         ) && entry.primary.starts_with("Switch Workspace")
+    }));
+    assert!(snapshot.entries.iter().any(|entry| {
+        entry.action == crate::model::command_palette::PaletteAction::RebalanceAllWorkspaces
+            && entry.primary == "Rebalance All Workspaces"
     }));
 }
 
@@ -717,6 +721,55 @@ fn direct_workspace_switch_uses_configured_display_affinity() {
         ),
         (builtin_active, Some(external_target))
     );
+}
+
+#[test]
+fn rebalance_all_workspaces_arranges_every_connected_display_once() {
+    let mut reactor = test_reactor();
+    let builtin = CGRect::new(CGPoint::new(0., 0.), CGSize::new(1440., 900.));
+    let external = CGRect::new(CGPoint::new(1440., 0.), CGSize::new(2560., 1440.));
+    reactor.handle_event(space_state_event(vec![builtin, external], vec![
+        Some(SpaceId::new(1)),
+        Some(SpaceId::new(2)),
+    ]));
+
+    let outcome = reactor
+        .dispatch_workflow(Event::Command(Command::Reactor(
+            ReactorCommand::RebalanceAllWorkspaces,
+        )))
+        .unwrap();
+
+    assert_eq!(outcome.arrange.passes, 1);
+    assert_eq!(outcome.arrange.space_scope, None);
+    assert_eq!(outcome.stdout_lines, [
+        "Rebalanced 8 workspaces (8 configurations) across 2 displays; skipped 0"
+    ]);
+}
+
+#[test]
+fn rebalance_all_workspaces_succeeds_as_noop_without_traditional_workspaces() {
+    let mut settings = crate::common::config::VirtualWorkspaceSettings::default();
+    settings.workspace_rules = (0..settings.default_workspace_count)
+        .map(|workspace| WorkspaceLayoutRule {
+            workspace: WorkspaceSelector::Index(workspace),
+            layout: LayoutMode::Scrolling,
+        })
+        .collect();
+    let mut reactor = test_reactor_with_workspace_settings(&settings);
+    reactor.config.virtual_workspaces = settings;
+    let screen = CGRect::new(CGPoint::ZERO, CGSize::new(1000., 800.));
+    reactor.handle_event(space_state_event(vec![screen], vec![Some(SpaceId::new(1))]));
+
+    let outcome = reactor
+        .dispatch_workflow(Event::Command(Command::Reactor(
+            ReactorCommand::RebalanceAllWorkspaces,
+        )))
+        .unwrap();
+
+    assert_eq!(outcome.arrange.passes, 0);
+    assert_eq!(outcome.stdout_lines, [
+        "Rebalanced 0 workspaces (0 configurations) across 1 displays; skipped 0"
+    ]);
 }
 
 #[test]

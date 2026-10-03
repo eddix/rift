@@ -111,6 +111,7 @@ pub enum ReactorCommand {
     },
     ToggleFocusUnmanaged,
     CycleUnmanagedWindows,
+    RebalanceAllWorkspaces,
     ShowMissionControlAll,
     ShowMissionControlCurrent,
     DismissMissionControl,
@@ -281,5 +282,23 @@ where E: DeError {
         LegacyCommand::Reactor(LegacyReactorCommand::Reactor(command)) => {
             Ok(RiftCommand::Reactor(command))
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn rebalance_all_workspaces_deserializes_from_typed_protocol() {
+        let command: RiftCommand = serde_json::from_value(serde_json::json!({
+            "reactor": "rebalance_all_workspaces"
+        }))
+        .unwrap();
+
+        assert_eq!(
+            command,
+            RiftCommand::Reactor(ReactorCommand::RebalanceAllWorkspaces)
+        );
     }
 }
