@@ -3220,9 +3220,7 @@ impl LayoutEngine {
 
         let activated_target = focus_target
             && self.workspaces.active_workspace(target_space) != Some(target_workspace_id)
-            && self
-                .workspaces
-                .set_active_workspace(target_space, target_workspace_id);
+            && self.workspaces.set_active_workspace(target_space, target_workspace_id);
         if activated_target {
             self.update_active_floating_windows(window_store, target_space);
             self.broadcast_workspace_changed(target_space);
@@ -3230,8 +3228,7 @@ impl LayoutEngine {
 
         if self.workspaces.last_focused_window(source_space, source_workspace_id) == Some(window_id)
         {
-            self.workspaces
-                .set_last_focused_window(source_space, source_workspace_id, None);
+            self.workspaces.set_last_focused_window(source_space, source_workspace_id, None);
         }
 
         let replacement_focus = (!focus_target && was_focused)
@@ -3250,8 +3247,11 @@ impl LayoutEngine {
             })
             .flatten();
         if focus_target {
-            self.workspaces
-                .set_last_focused_window(target_space, target_workspace_id, Some(window_id));
+            self.workspaces.set_last_focused_window(
+                target_space,
+                target_workspace_id,
+                Some(window_id),
+            );
             self.focused_window = Some(window_id);
             if self.floating.is_floating(window_id) {
                 self.floating.set_last_focus(Some(window_id));
@@ -3855,6 +3855,7 @@ mod tests {
             title_substring: None,
             ax_role: None,
             ax_subrole: None,
+            ax_identifier_regex: None,
         }];
         let mut engine = LayoutEngine::new(&settings, &LayoutSettings::default(), None);
         let mut window_store = WindowStore::default();
@@ -3984,6 +3985,7 @@ mod tests {
             title_substring: None,
             ax_role: None,
             ax_subrole: None,
+            ax_identifier_regex: None,
         }];
         let mut layout_settings = LayoutSettings::default();
         layout_settings.scrolling.min_column_width_ratio = 0.1;

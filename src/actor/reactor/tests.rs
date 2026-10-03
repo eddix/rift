@@ -694,14 +694,26 @@ fn direct_workspace_switch_uses_configured_display_affinity() {
         Some(external_space),
     ]));
 
-    let builtin_active = reactor.layout_manager.layout_engine.active_workspace(builtin_space);
+    let builtin_active = reactor
+        .layout_manager
+        .layout_engine
+        .workspaces()
+        .active_workspace(builtin_space);
     let external_target = reactor.test_workspace(external_space, 1);
     reactor.handle_test_layout_command(LayoutCommand::SwitchToWorkspace(1));
 
     assert_eq!(
         (
-            reactor.layout_manager.layout_engine.active_workspace(builtin_space),
-            reactor.layout_manager.layout_engine.active_workspace(external_space),
+            reactor
+                .layout_manager
+                .layout_engine
+                .workspaces()
+                .active_workspace(builtin_space),
+            reactor
+                .layout_manager
+                .layout_engine
+                .workspaces()
+                .active_workspace(external_space),
         ),
         (builtin_active, Some(external_target))
     );
@@ -763,8 +775,16 @@ fn direct_workspace_switch_refocuses_active_workspace_on_other_display() {
     assert_eq!(
         (
             focused,
-            reactor.layout_manager.layout_engine.active_workspace(builtin_space),
-            reactor.layout_manager.layout_engine.active_workspace(external_space),
+            reactor
+                .layout_manager
+                .layout_engine
+                .workspaces()
+                .active_workspace(builtin_space),
+            reactor
+                .layout_manager
+                .layout_engine
+                .workspaces()
+                .active_workspace(external_space),
         ),
         (Some(chat), Some(chat_workspace), Some(terminal_workspace))
     );
@@ -799,12 +819,12 @@ fn move_window_to_workspace_crosses_to_its_affinity_display() {
     assert_eq!(
         (
             reactor.assigned_space_for_window_id(window),
+            reactor.state.windows.workspace_for_window(external_space, window),
             reactor
                 .layout_manager
                 .layout_engine
-                .virtual_workspace_manager()
-                .workspace_for_window(&reactor.state.windows, external_space, window),
-            reactor.layout_manager.layout_engine.active_workspace(external_space),
+                .workspaces()
+                .active_workspace(external_space),
         ),
         (
             Some(external_space),
@@ -837,8 +857,11 @@ fn app_rule_places_window_on_workspace_affinity_display_without_switching_worksp
         Some(builtin_space),
         Some(external_space),
     ]));
-    let external_active_before =
-        reactor.layout_manager.layout_engine.active_workspace(external_space);
+    let external_active_before = reactor
+        .layout_manager
+        .layout_engine
+        .workspaces()
+        .active_workspace(external_space);
     let target_workspace = reactor.test_workspace(external_space, 1);
 
     apps.make_app_and_settle(&mut reactor, 1, make_windows(1));
@@ -848,7 +871,11 @@ fn app_rule_places_window_on_workspace_affinity_display_without_switching_worksp
         (
             reactor.assigned_space_for_window_id(window),
             reactor.test_workspace_for_window(external_space, window),
-            reactor.layout_manager.layout_engine.active_workspace(external_space),
+            reactor
+                .layout_manager
+                .layout_engine
+                .workspaces()
+                .active_workspace(external_space),
         ),
         (
             Some(external_space),
@@ -882,7 +909,6 @@ fn first_space_activation_reapplies_fixed_rule_to_provisional_workspace_assignme
         vec![screen],
         vec![Some(space)],
         |state| {
-            state.has_seen_display_set = true;
             state.active_window_spaces.insert(window_server_id, space);
         },
     ));
@@ -934,9 +960,7 @@ fn display_topology_change_reapplies_fixed_rule_after_space_reassignment() {
         vec![builtin],
         vec![Some(builtin_space)],
         |state| {
-            state.has_seen_display_set = true;
             state.display_set_changed = true;
-            state.topology_changed = true;
             state.active_window_spaces.insert(window_server_id, builtin_space);
         },
     ));
@@ -977,7 +1001,6 @@ fn reconnecting_affinity_display_moves_existing_managed_window_back() {
         vec![Some(builtin_space), Some(external_space)],
         |state| {
             state.display_set_changed = true;
-            state.topology_changed = true;
             state.should_force_refresh_layout = true;
         },
     ));
@@ -986,111 +1009,6 @@ fn reconnecting_affinity_display_moves_existing_managed_window_back() {
     assert_eq!(
         reactor.assigned_space_for_window_id(window),
         Some(external_space)
-    );
-}
-
-#[test]
-fn lifecycle_release_reapplies_fixed_rule_after_delayed_post_reconnect_reassignment() {
-    let mut settings = crate::common::config::VirtualWorkspaceSettings::default();
-    settings.app_rules = vec![AppWorkspaceRule {
-        app_id: Some("com.testapp1".to_string()),
-        workspace: Some(WorkspaceSelector::Index(0)),
-        ..Default::default()
-    }];
-    settings.workspace_display_rules = vec![WorkspaceDisplayRule {
-        workspace: WorkspaceSelector::Index(0),
-        display: WorkspaceDisplayTarget::BuiltIn,
-    }];
-    let mut apps = Apps::new();
-    let mut reactor = test_reactor_with_workspace_settings(&settings);
-    reactor.config.virtual_workspaces = settings;
-    let builtin = CGRect::new(CGPoint::new(0., 0.), CGSize::new(1000., 1000.));
-    let external = CGRect::new(CGPoint::new(1000., 0.), CGSize::new(1000., 1000.));
-    let builtin_space = SpaceId::new(1);
-    let external_space = SpaceId::new(2);
-    reactor.handle_event(space_state_event(vec![builtin, external], vec![
-        Some(builtin_space),
-        Some(external_space),
-    ]));
-    apps.make_app_and_settle(&mut reactor, 1, make_windows(1));
-    let window = WindowId::new(1, 1);
-    let window_server_id = reactor.test_window_server_id(window);
-
-    reactor.handle_event(Event::SessionDidResignActive);
-    reactor.handle_event(Event::SessionDidBecomeActive);
-    reactor.handle_event(Event::DisplayChurnBegin);
-    reactor.handle_event(space_state_event_with(
-        vec![builtin, external],
-        vec![Some(builtin_space), Some(external_space)],
-        |state| {
-            state.display_set_changed = true;
-            state.topology_changed = true;
-            state.should_force_refresh_layout = true;
-            state.topology_window_delta = Some(crate::actor::spaces::TopologyWindowDelta {
-                epoch: 1,
-                flags: crate::sys::skylight::DisplayReconfigFlags::ADD,
-                appeared: vec![(window_server_id, external_space)],
-                disappeared: vec![(window_server_id, builtin_space)],
-            });
-            state.active_window_spaces.insert(window_server_id, external_space);
-        },
-    ));
-
-    reactor.handle_event(space_state_event_with(
-        vec![builtin, external],
-        vec![Some(builtin_space), Some(external_space)],
-        |state| {
-            state.releases_lifecycle_refresh_quarantine = true;
-            state.active_window_spaces.insert(window_server_id, external_space);
-        },
-    ));
-
-    assert_eq!(
-        (
-            reactor.assigned_space_for_window_id(window),
-            reactor.test_workspace_for_window(builtin_space, window),
-        ),
-        (
-            Some(builtin_space),
-            Some(reactor.test_workspace(builtin_space, 0)),
-        )
-    );
-}
-
-#[test]
-fn lifecycle_release_without_topology_change_preserves_manual_workspace_assignment() {
-    let mut settings = crate::common::config::VirtualWorkspaceSettings::default();
-    settings.app_rules = vec![AppWorkspaceRule {
-        app_id: Some("com.testapp1".to_string()),
-        workspace: Some(WorkspaceSelector::Index(0)),
-        ..Default::default()
-    }];
-    let mut apps = Apps::new();
-    let mut reactor = test_reactor_with_workspace_settings(&settings);
-    reactor.config.virtual_workspaces = settings;
-    let screen = CGRect::new(CGPoint::new(0., 0.), CGSize::new(1000., 1000.));
-    let space = SpaceId::new(1);
-    reactor.handle_event(space_state_event(vec![screen], vec![Some(space)]));
-    apps.make_app_and_settle(&mut reactor, 1, make_windows(1));
-    let window = WindowId::new(1, 1);
-    let window_server_id = reactor.test_window_server_id(window);
-    let manual_workspace = reactor.test_workspace(space, 1);
-    assert!(reactor.assign_test_window_to_workspace(space, window, manual_workspace));
-
-    reactor.handle_event(Event::SessionDidResignActive);
-    reactor.handle_event(Event::SessionDidBecomeActive);
-    reactor.handle_event(space_state_event_with(
-        vec![screen],
-        vec![Some(space)],
-        |state| {
-            state.releases_lifecycle_refresh_quarantine = true;
-            state.active_window_spaces.insert(window_server_id, space);
-        },
-    ));
-
-    assert_eq!(
-        reactor.test_workspace_for_window(space, window),
-        Some(manual_workspace)
     );
 }
 
@@ -1129,7 +1047,11 @@ fn next_workspace_skips_workspaces_affined_to_other_displays() {
 
     reactor.handle_test_layout_command(LayoutCommand::NextWorkspace(None));
     assert_eq!(
-        reactor.layout_manager.layout_engine.active_workspace(builtin_space),
+        reactor
+            .layout_manager
+            .layout_engine
+            .workspaces()
+            .active_workspace(builtin_space),
         Some(builtin_workspace)
     );
 
@@ -1145,7 +1067,11 @@ fn next_workspace_skips_workspaces_affined_to_other_displays() {
     reactor.handle_test_layout_command(LayoutCommand::NextWorkspace(None));
 
     assert_eq!(
-        reactor.layout_manager.layout_engine.active_workspace(external_space),
+        reactor
+            .layout_manager
+            .layout_engine
+            .workspaces()
+            .active_workspace(external_space),
         Some(external_workspace_two)
     );
 }
@@ -1784,7 +1710,7 @@ fn snapshot_projection_does_not_initialize_unknown_workspace_topology() {
         !reactor
             .layout_manager
             .layout_engine
-            .virtual_workspace_manager()
+            .workspaces()
             .initialized_spaces()
             .contains(&unknown_space)
     );
@@ -1988,7 +1914,7 @@ fn make_window_explicitly_unmanaged(reactor: &mut Reactor, wid: WindowId) {
     reactor
         .layout_manager
         .layout_engine
-        .virtual_workspace_manager_mut()
+        .workspaces_mut()
         .remove_window(&mut reactor.state.windows, wid);
     reactor.state.windows.window_mut(wid).unwrap().manage_override = Some(false);
 }

@@ -97,12 +97,12 @@ use crate::actor::{self, border, menu_bar, stack_line};
 use crate::common::collections::{BTreeMap, HashMap, HashSet};
 use crate::common::config::{Config, WorkspaceDisplayTarget};
 use crate::layout_engine::{self as layout, Direction, LayoutEngine, LayoutEvent, ResolvedWindow};
-use crate::model::RiftState;
 use crate::model::broadcast::{
     BroadcastEvent, BroadcastSender, protocol_window_id, protocol_workspace_id,
 };
 use crate::model::space_activation::{SpaceActivationConfig, SpaceActivationPolicy};
 use crate::model::tx_store::WindowTxStore;
+use crate::model::{AppRuleResult, RiftState};
 use crate::sys::event::MouseState;
 use crate::sys::executor::Executor;
 use crate::sys::geometry::{CGRectDef, CGRectExt, SameAs};
@@ -1146,7 +1146,6 @@ impl Reactor {
                 | Event::WindowDeminiaturized(..)
                 | Event::WindowTitleChanged(..)
                 | Event::NativeTabFocused { .. }
-                | Event::WindowsDiscovered { .. }
                 | Event::SpaceCreated(..)
                 | Event::SpaceDestroyed(..)
         )
@@ -2737,8 +2736,6 @@ impl Reactor {
                 layout_changed |=
                     self.update_layout_or_warn(outcome.arrange.is_resize, false, Some(space));
             }
-            // Publish the menu state once after all arrange passes have completed.
-            self.maybe_send_menu_update();
         }
         if layout_changed && outcome.drop_haptic && !cfg!(test) {
             let _ = crate::sys::haptics::perform_haptic(
@@ -3312,7 +3309,6 @@ impl Reactor {
             self.space_state.menu_bar_space = menu_bar_space;
             self.space_state.command_space = command_space;
             outcome.arrange.passes = 0;
-            self.maybe_send_menu_update();
             return Ok(outcome);
         }
         if display_set_changed {
@@ -4091,14 +4087,6 @@ impl Reactor {
                 self.refresh_active_drag_scene();
             }
         }
-        if matches!(
-            event_clone,
-            LayoutEvent::WindowRemoved(_)
-                | LayoutEvent::WindowRemovedPreserveFloating(_)
-                | LayoutEvent::AppClosed(_)
-        ) {
-            self.maybe_send_menu_update();
-        }
         if focus_desktop && let Some(space) = self.workspace_command_space() {
             self.focus_desktop_if_active_workspace_empty(space);
         }
@@ -4353,7 +4341,9 @@ impl Reactor {
                         app_bundle_id: app_info.bundle_id.as_deref(),
                         app_name: app_info.localized_name.as_deref(),
                         window_title: window_metadata.as_ref().map(|metadata| metadata.0.as_str()),
-                        ax_role: window_metadata.as_ref().and_then(|metadata| metadata.1.as_deref()),
+                        ax_role: window_metadata
+                            .as_ref()
+                            .and_then(|metadata| metadata.1.as_deref()),
                         ax_subrole: window_metadata
                             .as_ref()
                             .and_then(|metadata| metadata.2.as_deref()),
@@ -5464,7 +5454,11 @@ impl Reactor {
         let target_screen = self.preferred_screen_for_workspace(workspace_index)?;
         let target_space = target_screen.space.filter(|space| self.is_space_active(*space))?;
         if source_space == target_space
-            || self.layout_manager.layout_engine.active_workspace_idx(target_space)
+            || self
+                .layout_manager
+                .layout_engine
+                .workspaces()
+                .active_workspace_idx(target_space)
                 != Some(workspace_index as u64)
         {
             return None;
@@ -5473,6 +5467,7 @@ impl Reactor {
         let focus_window = self.last_focused_window_in_space(target_space).or_else(|| {
             self.layout_manager
                 .layout_engine
+                .workspaces()
                 .windows_in_active_workspace(&self.state.windows, target_space)
                 .into_iter()
                 .next()
