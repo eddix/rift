@@ -846,6 +846,16 @@ impl Reactor {
                 ["configuration".to_string(), "refresh".to_string()],
                 PaletteAction::ReloadConfig,
             ),
+            command_entry(
+                "layout.rebalance-all".to_string(),
+                "Rebalance All Workspaces".to_string(),
+                [
+                    "layout".to_string(),
+                    "equalize".to_string(),
+                    "reset".to_string(),
+                ],
+                PaletteAction::RebalanceAllWorkspaces,
+            ),
         ]);
         for mode in [
             LayoutMode::Traditional,

@@ -119,6 +119,23 @@ pub(crate) struct WorkspaceDisplayMove {
     pub(crate) focus_target: bool,
 }
 
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub(crate) struct RebalanceAllReport {
+    pub(crate) displays: usize,
+    pub(crate) workspaces: usize,
+    pub(crate) configurations: usize,
+    pub(crate) skipped: usize,
+}
+
+impl RebalanceAllReport {
+    pub(crate) fn summary(self) -> String {
+        format!(
+            "Rebalanced {} workspaces ({} configurations) across {} displays; skipped {}",
+            self.workspaces, self.configurations, self.displays, self.skipped
+        )
+    }
+}
+
 #[non_exhaustive]
 #[derive(Debug, Clone)]
 pub enum LayoutEvent {
@@ -3054,6 +3071,67 @@ impl LayoutEngine {
 
     pub fn workspaces_mut(&mut self) -> &mut WorkspaceStore { &mut self.workspaces }
 
+    pub(crate) fn rebalance_all_workspaces(&mut self, spaces: &[SpaceId]) -> RebalanceAllReport {
+        let spaces = spaces.iter().copied().collect::<HashSet<_>>();
+        let mut report = RebalanceAllReport {
+            displays: spaces.len(),
+            ..Default::default()
+        };
+
+        for space in spaces {
+            let workspace_ids = self
+                .workspaces
+                .existing_workspaces(space)
+                .into_iter()
+                .map(|(workspace, _)| workspace)
+                .collect::<Vec<_>>();
+
+            for workspace_id in workspace_ids {
+                let workspace = &mut self.workspaces[workspace_id];
+                let LayoutSystemKind::Traditional(system) = &mut workspace.layout_system else {
+                    continue;
+                };
+                let active_layout = workspace.layout_state.active();
+                let layouts = workspace.layout_state.all_layouts().collect::<HashSet<_>>();
+                if layouts.is_empty() {
+                    report.skipped += 1;
+                    warn!(
+                        ?space,
+                        ?workspace_id,
+                        "Skipping traditional workspace without layouts"
+                    );
+                    continue;
+                }
+
+                let mut rebalanced = false;
+                for layout in layouts {
+                    if !system.contains_layout(layout) {
+                        report.skipped += 1;
+                        warn!(
+                            ?space,
+                            ?workspace_id,
+                            ?layout,
+                            "Skipping missing traditional layout configuration"
+                        );
+                        continue;
+                    }
+                    system.rebalance(layout);
+                    report.configurations += 1;
+                    rebalanced = true;
+                }
+
+                if rebalanced {
+                    report.workspaces += 1;
+                    if active_layout.is_some_and(|layout| system.contains_layout(layout)) {
+                        workspace.layout_state.last_saved = active_layout;
+                    }
+                }
+            }
+        }
+
+        report
+    }
+
     pub fn assign_window_with_app_info(
         &mut self,
         window_store: &mut WindowStore,
@@ -4352,6 +4430,145 @@ mod tests {
             resized_layout, after_other_space_sync,
             "membership sync on one space must not rebalance saved layouts on another space"
         );
+    }
+
+    #[test]
+    fn rebalance_all_workspaces_covers_displays_workspaces_and_saved_sizes() {
+        let mut window_store = WindowStore::default();
+        let mut engine = test_engine();
+        let space_a = SpaceId::new(401);
+        let space_b = SpaceId::new(402);
+        let first_screen = CGRect::new(CGPoint::ZERO, CGSize::new(1000.0, 800.0));
+        let second_screen = CGRect::new(CGPoint::ZERO, CGSize::new(1200.0, 800.0));
+        let windows = [WindowId::new(1, 1), WindowId::new(1, 2)];
+
+        let _ = engine.handle_event(
+            &mut window_store,
+            LayoutEvent::SpaceExposed(space_a, first_screen.size),
+        );
+        let _ = engine.handle_event(
+            &mut window_store,
+            LayoutEvent::windows_observed(
+                space_a,
+                1,
+                windows
+                    .into_iter()
+                    .map(|window| window_layout_info(window, CGSize::ZERO))
+                    .collect(),
+                None,
+            ),
+        );
+        let _ = engine.handle_command(
+            &mut window_store,
+            Some(space_a),
+            &[space_a, space_b],
+            &HashMap::default(),
+            LayoutCommand::ResizeWindowBy { amount: 0.2 },
+        );
+        let _ = engine.handle_event(
+            &mut window_store,
+            LayoutEvent::SpaceExposed(space_a, second_screen.size),
+        );
+        let _ = engine.handle_event(
+            &mut window_store,
+            LayoutEvent::SpaceExposed(space_b, first_screen.size),
+        );
+
+        let report = engine.rebalance_all_workspaces(&[space_a, space_b, space_a]);
+
+        assert_eq!(report, RebalanceAllReport {
+            displays: 2,
+            workspaces: 8,
+            configurations: 12,
+            skipped: 0,
+        });
+        for (space, screen) in [(space_a, second_screen), (space_b, first_screen)] {
+            let frames = engine.calculate_layout(
+                space,
+                screen,
+                &LayoutSettings::default().gaps,
+                0.0,
+                Default::default(),
+                Default::default(),
+            );
+            if space == space_a {
+                assert_eq!(frames[0].1.size.width, frames[1].1.size.width);
+            }
+        }
+
+        let _ = engine.handle_event(
+            &mut window_store,
+            LayoutEvent::SpaceExposed(space_a, first_screen.size),
+        );
+        let restored = engine.calculate_layout(
+            space_a,
+            first_screen,
+            &LayoutSettings::default().gaps,
+            0.0,
+            Default::default(),
+            Default::default(),
+        );
+        assert_eq!(restored[0].1.size.width, restored[1].1.size.width);
+    }
+
+    #[test]
+    fn rebalance_all_workspaces_leaves_non_traditional_modes_unchanged() {
+        let mut workspace_settings = VirtualWorkspaceSettings::default();
+        workspace_settings.workspace_rules = vec![WorkspaceLayoutRule {
+            workspace: WorkspaceSelector::Index(0),
+            layout: LayoutMode::Scrolling,
+        }];
+        let mut engine = LayoutEngine::new(&workspace_settings, &LayoutSettings::default(), None);
+        let mut window_store = WindowStore::default();
+        let space = SpaceId::new(403);
+        let size = CGSize::new(1000.0, 800.0);
+        let _ = engine.handle_event(&mut window_store, LayoutEvent::SpaceExposed(space, size));
+        let scrolling_workspace = engine.workspaces.list_workspaces(space)[0].0;
+        let before = engine.workspaces[scrolling_workspace]
+            .layout_state
+            .all_layouts()
+            .collect::<Vec<_>>();
+
+        let report = engine.rebalance_all_workspaces(&[space]);
+
+        assert_eq!(report.displays, 1);
+        assert_eq!(report.workspaces, 3);
+        assert_eq!(report.configurations, 3);
+        assert_eq!(report.skipped, 0);
+        assert_eq!(
+            engine.workspaces[scrolling_workspace]
+                .layout_state
+                .all_layouts()
+                .collect::<Vec<_>>(),
+            before
+        );
+        assert_eq!(
+            engine.workspaces[scrolling_workspace].layout_mode(),
+            LayoutMode::Scrolling
+        );
+    }
+
+    #[test]
+    fn rebalance_all_workspaces_skips_invalid_workspace_and_continues() {
+        let mut engine = test_engine();
+        let mut window_store = WindowStore::default();
+        let space = SpaceId::new(404);
+        let _ = engine.handle_event(
+            &mut window_store,
+            LayoutEvent::SpaceExposed(space, CGSize::new(1000.0, 800.0)),
+        );
+        let invalid = engine.workspaces.list_workspaces(space)[0].0;
+        engine.workspaces[invalid].layout_state.configurations.clear();
+        engine.workspaces[invalid].layout_state.last_saved = None;
+
+        let report = engine.rebalance_all_workspaces(&[space]);
+
+        assert_eq!(report, RebalanceAllReport {
+            displays: 1,
+            workspaces: 3,
+            configurations: 3,
+            skipped: 1,
+        });
     }
 
     #[test]
