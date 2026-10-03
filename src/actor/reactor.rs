@@ -2773,8 +2773,6 @@ impl Reactor {
                 layout_changed |=
                     self.update_layout_or_warn(outcome.arrange.is_resize, false, Some(space));
             }
-            // Publish the menu state once after all arrange passes have completed.
-            self.maybe_send_menu_update();
         }
         if layout_changed && outcome.drop_haptic && !cfg!(test) {
             let _ = crate::sys::haptics::perform_haptic(
@@ -3372,7 +3370,6 @@ impl Reactor {
             self.space_state.menu_bar_space = menu_bar_space;
             self.space_state.command_space = command_space;
             outcome.arrange.passes = 0;
-            self.maybe_send_menu_update();
             return Ok(outcome);
         }
         if display_set_changed {
@@ -4181,14 +4178,6 @@ impl Reactor {
             if self.is_in_drag() {
                 self.refresh_active_drag_scene();
             }
-        }
-        if matches!(
-            event_clone,
-            LayoutEvent::WindowRemoved(_)
-                | LayoutEvent::WindowRemovedPreserveFloating(_)
-                | LayoutEvent::AppClosed(_)
-        ) {
-            self.maybe_send_menu_update();
         }
         if focus_desktop && let Some(space) = self.workspace_command_space() {
             self.focus_desktop_if_active_workspace_empty(space);
@@ -5539,7 +5528,11 @@ impl Reactor {
         let target_screen = self.preferred_screen_for_workspace(workspace_index)?;
         let target_space = target_screen.space.filter(|space| self.is_space_active(*space))?;
         if source_space == target_space
-            || self.layout_manager.layout_engine.active_workspace_idx(target_space)
+            || self
+                .layout_manager
+                .layout_engine
+                .workspaces()
+                .active_workspace_idx(target_space)
                 != Some(workspace_index as u64)
         {
             return None;
@@ -5548,6 +5541,7 @@ impl Reactor {
         let focus_window = self.last_focused_window_in_space(target_space).or_else(|| {
             self.layout_manager
                 .layout_engine
+                .workspaces()
                 .windows_in_active_workspace(&self.state.windows, target_space)
                 .into_iter()
                 .next()

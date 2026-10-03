@@ -1412,6 +1412,7 @@ mod tests {
             frame: Default::default(),
             min_frame: Default::default(),
             max_frame: Default::default(),
+            corner_radius: None,
         });
         store.suspend_window_server_to_native_fullscreen(
             7,

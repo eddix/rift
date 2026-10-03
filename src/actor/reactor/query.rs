@@ -7,7 +7,6 @@ use rift_protocol::{
 };
 
 use crate::actor::app::WindowId;
-use crate::actor::menu_bar;
 use crate::actor::reactor::{Event, Reactor, Sender};
 use crate::common::collections::{HashMap, HashSet};
 use crate::model::WindowWorkspaceInfo;
@@ -256,48 +255,6 @@ impl Reactor {
             .and_then(|screen| screen.space)
     }
 
-    pub(super) fn maybe_send_menu_update(&mut self) {
-        let menu_tx = match self.menu_manager.menu_tx.as_ref() {
-            Some(tx) => tx.clone(),
-            None => return,
-        };
-
-        let active_space =
-            self.resolve_menu_bar_space_with_preferred(self.space_state.menu_bar_space);
-        let active_space_is_activated =
-            active_space.is_some_and(|space| self.is_space_active(space));
-        // Order by physical arrangement, independent of the command/focused display.
-        let mut screens: Vec<_> = self
-            .space_state
-            .screens
-            .iter()
-            .filter_map(|screen| {
-                screen.space.map(|space| (screen.frame, screen.display_uuid.clone(), space))
-            })
-            .collect();
-        screens.sort_by(|a, b| {
-            a.0.origin
-                .x
-                .total_cmp(&b.0.origin.x)
-                .then_with(|| a.0.origin.y.total_cmp(&b.0.origin.y))
-                .then_with(|| a.1.cmp(&b.1))
-        });
-        let displays = screens
-            .into_iter()
-            .map(|(_, display_uuid, space)| menu_bar::DisplayWorkspaces {
-                display_uuid,
-                space,
-                is_active_context: Some(space) == active_space,
-                workspaces: self.query_workspaces(Some(space)),
-            })
-            .collect();
-
-        menu_tx.send(menu_bar::Event::Update(menu_bar::Update {
-            active_space_is_activated,
-            displays,
-        }));
-    }
-
     pub fn query_command_palette(&self) -> PaletteSnapshot { self.handle_command_palette_query() }
 
     pub(super) fn menu_bar_space(&self) -> Option<SpaceId> {
@@ -330,13 +287,15 @@ impl Reactor {
         let Some(space) = space_id_param.or_else(|| self.default_query_space()) else {
             return Vec::new();
         };
-        let workspace_list = self.layout_manager.layout_engine.workspaces_mut().list_workspaces(space);
+        let workspace_list =
+            self.layout_manager.layout_engine.workspaces_mut().list_workspaces(space);
         self.project_workspaces(space, &workspace_list)
     }
 
     /// Build observable workspace data without initializing or mutating topology.
     pub(super) fn snapshot_workspaces(&self, space: SpaceId) -> Vec<RuntimeWorkspaceData> {
-        let workspace_list = self.layout_manager.layout_engine.workspaces().existing_workspaces(space);
+        let workspace_list =
+            self.layout_manager.layout_engine.workspaces().existing_workspaces(space);
         self.project_workspaces(space, &workspace_list)
     }
 
@@ -346,15 +305,16 @@ impl Reactor {
         workspace_list: &[(crate::model::VirtualWorkspaceId, String)],
     ) -> Vec<RuntimeWorkspaceData> {
         let mut workspaces = Vec::with_capacity(workspace_list.len());
-        let active_workspace = self.layout_manager.layout_engine.workspaces().active_workspace(space);
+        let active_workspace =
+            self.layout_manager.layout_engine.workspaces().active_workspace(space);
 
         for (index, (workspace_id, workspace_name)) in workspace_list.iter().enumerate() {
             let is_active = active_workspace == Some(*workspace_id);
-            let workspace_windows_ids = self.layout_manager.layout_engine.workspaces().workspace_windows(
-                &self.state.windows,
-                space,
-                *workspace_id,
-            );
+            let workspace_windows_ids = self
+                .layout_manager
+                .layout_engine
+                .workspaces()
+                .workspace_windows(&self.state.windows, space, *workspace_id);
 
             let predicted_positions = if !is_active {
                 let screen_info = self
@@ -393,19 +353,19 @@ impl Reactor {
                 .space_state
                 .screen_by_space(space)
                 .map(|screen| {
-                        let gaps = self
-                            .config
-                            .settings
-                            .layout
-                            .gaps
-                            .effective_for_display(screen.display_uuid_opt());
-                        self.layout_manager.layout_engine.logical_window_frames(
-                            space,
-                            *workspace_id,
-                            screen.frame,
-                            &gaps,
-                        )
-                    })
+                    let gaps = self
+                        .config
+                        .settings
+                        .layout
+                        .gaps
+                        .effective_for_display(screen.display_uuid_opt());
+                    self.layout_manager.layout_engine.logical_window_frames(
+                        space,
+                        *workspace_id,
+                        screen.frame,
+                        &gaps,
+                    )
+                })
                 .unwrap_or_default();
             let mut windows: Vec<RuntimeWindowData> = Vec::new();
             for wid in workspace_windows_ids.into_iter() {
@@ -667,13 +627,9 @@ impl Reactor {
             let Some(space) = screen.space else {
                 continue;
             };
-            let active = self.layout_manager.layout_engine.active_workspace(space);
-            for (workspace_id, name) in self
-                .layout_manager
-                .layout_engine
-                .virtual_workspace_manager()
-                .existing_workspaces(space)
-                .iter()
+            let active = self.layout_manager.layout_engine.workspaces().active_workspace(space);
+            for (workspace_id, name) in
+                self.layout_manager.layout_engine.workspaces().existing_workspaces(space).iter()
             {
                 workspace_labels.insert(
                     WindowWorkspaceInfo {
@@ -821,7 +777,7 @@ impl Reactor {
             .map(|space| {
                 self.layout_manager
                     .layout_engine
-                    .virtual_workspace_manager()
+                    .workspaces()
                     .existing_workspaces(space)
                     .iter()
                     .map(|(_, name)| name.clone())

@@ -50,8 +50,13 @@ impl Reactor {
                 active_workspace_idx: self
                     .layout_manager
                     .layout_engine
+                    .workspaces()
                     .active_workspace_idx(active_space),
-                active_workspace: self.layout_manager.layout_engine.active_workspace(active_space),
+                active_workspace: self
+                    .layout_manager
+                    .layout_engine
+                    .workspaces()
+                    .active_workspace(active_space),
                 windows: self.query_windows(Some(active_space)),
             }
         });
