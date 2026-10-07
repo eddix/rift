@@ -621,6 +621,7 @@ impl Reactor {
                 ),
             );
         }
+        let show_display_metadata = display_by_space.len() > 1;
 
         let mut workspace_labels: HashMap<WindowWorkspaceInfo, WorkspaceLabel> = HashMap::default();
         for screen in &self.space_state.screens {
@@ -688,13 +689,16 @@ impl Reactor {
             };
             let workspace_name = workspace.map(|workspace| workspace.name.as_str());
             let display_name = display.map(|display| display.0.as_str());
-            let mut metadata = vec![app_name.clone()];
+            let mut metadata = Vec::new();
+            if title != app_name {
+                metadata.push(app_name.clone());
+            }
             if let Some(workspace) = workspace_name {
                 metadata.push(workspace.to_string());
             } else {
                 metadata.push("Unmanaged".to_string());
             }
-            if let Some(display) = display_name {
+            if show_display_metadata && let Some(display) = display_name {
                 metadata.push(display.to_string());
             }
             let mut keywords = vec![app_name.clone()];

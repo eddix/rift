@@ -33,22 +33,25 @@ use crate::sys::window_server::{self, WindowServerId};
 
 const SEARCH_FIELD_HEIGHT: f64 = 28.0;
 const SEARCH_RESULTS_GAP: f64 = 9.0;
-const SEARCH_TEXT_VERTICAL_OFFSET: f64 = -3.0;
-const HEADER_AUXILIARY_VERTICAL_OFFSET: f64 = 10.0;
+const HEADER_CHROME_HORIZONTAL_INSET: f64 = 8.0;
+const HEADER_CHROME_VERTICAL_PADDING: f64 = 4.0;
 const ROW_HEIGHT: f64 = 44.0;
 const PANEL_PADDING: f64 = 12.0;
 const RESULTS_BOTTOM_PADDING: f64 = 10.0;
 const TOP_PADDING: f64 = 11.0;
 const ICON_SIZE: f64 = 27.0;
 const MIN_TITLE_WIDTH: f64 = 72.0;
-const ACCENT_COLOR: (f64, f64, f64, f64) = (0.18, 0.68, 0.92, 0.92);
-const GLOW_COLOR: (f64, f64, f64) = (0.18, 0.68, 0.92);
-const GLOW_CENTER_ALPHA: f64 = 0.3;
-const GLOW_MIDDLE_ALPHA: f64 = 0.1;
-const GLOW_MIN_OPACITY: f32 = 0.66;
-const GLOW_MAX_OPACITY: f32 = 0.92;
-const GLOW_STATIC_OPACITY: f32 = 0.79;
-const GLOW_HALF_CYCLE_SECONDS: f64 = 3.4;
+const ACCENT_COLOR: (f64, f64, f64, f64) = (0.31, 0.82, 0.7, 0.94);
+const SIGNAL_COLOR: (f64, f64, f64, f64) = (0.95, 0.55, 0.23, 0.96);
+const IVORY_COLOR: (f64, f64, f64, f64) = (0.91, 0.89, 0.79, 1.0);
+const SECONDARY_COLOR: (f64, f64, f64, f64) = (0.56, 0.61, 0.54, 1.0);
+const GLOW_COLOR: (f64, f64, f64) = (0.24, 0.68, 0.58);
+const GLOW_CENTER_ALPHA: f64 = 0.22;
+const GLOW_MIDDLE_ALPHA: f64 = 0.075;
+const GLOW_MIN_OPACITY: f32 = 0.6;
+const GLOW_MAX_OPACITY: f32 = 0.86;
+const GLOW_STATIC_OPACITY: f32 = 0.72;
+const GLOW_HALF_CYCLE_SECONDS: f64 = 4.2;
 const GLOW_ANIMATION_KEY: &str = "rift.command-palette.ambient-glow";
 const GLOW_HORIZONTAL_POSITION: f64 = 0.618_033_988_75;
 const PANEL_TINT_ALPHA: f64 = 0.72;
@@ -73,15 +76,15 @@ pub enum PalettePanelMode {
 impl PalettePanelMode {
     fn brand_label(self) -> &'static str {
         match self {
-            Self::Windows => "RIFT /",
-            Self::Commands => "RIFT / COMMANDS",
+            Self::Windows => "RIFT // DECK 01",
+            Self::Commands => "RIFT // CMD DECK",
         }
     }
 
     fn brand_width(self) -> f64 {
         match self {
-            Self::Windows => 42.0,
-            Self::Commands => 108.0,
+            Self::Windows => 104.0,
+            Self::Commands => 112.0,
         }
     }
 }
@@ -172,6 +175,7 @@ define_class!(
         #[unsafe(method(drawRect:))]
         fn draw_rect(&self, _dirty_rect: CGRect) {
             draw_ambient_glow(self.bounds());
+            draw_cassette_chrome(self.bounds());
         }
     }
 );
@@ -306,6 +310,7 @@ struct PaletteResultsViewIvars {
     primary_attributes: Retained<NSDictionary<NSAttributedStringKey, AnyObject>>,
     secondary_attributes: Retained<NSDictionary<NSAttributedStringKey, AnyObject>>,
     empty_attributes: Retained<NSDictionary<NSAttributedStringKey, AnyObject>>,
+    text_metrics: RowTextMetrics,
     icons: RefCell<HashMap<i32, Retained<NSImage>>>,
 }
 
@@ -341,18 +346,22 @@ define_class!(
 
 impl PaletteResultsView {
     fn new(mtm: MainThreadMarker, frame: CGRect, callback: InputHandler) -> Retained<Self> {
-        let primary_attributes = text_attributes(
-            NSFont::systemFontOfSize_weight(14.5, unsafe { NSFontWeightMedium }).as_ref(),
-            NSColor::colorWithWhite_alpha(0.95, 1.0).as_ref(),
-        );
-        let secondary_attributes = text_attributes(
-            NSFont::systemFontOfSize(11.5).as_ref(),
-            NSColor::colorWithWhite_alpha(0.58, 1.0).as_ref(),
-        );
-        let empty_attributes = text_attributes(
-            NSFont::systemFontOfSize(12.0).as_ref(),
-            NSColor::colorWithWhite_alpha(0.48, 1.0).as_ref(),
-        );
+        let primary_font = NSFont::systemFontOfSize_weight(14.5, unsafe { NSFontWeightMedium });
+        let secondary_font =
+            NSFont::monospacedSystemFontOfSize_weight(10.5, unsafe { NSFontWeightMedium });
+        let empty_font =
+            NSFont::monospacedSystemFontOfSize_weight(11.0, unsafe { NSFontWeightMedium });
+        let primary_attributes =
+            text_attributes(primary_font.as_ref(), palette_color(IVORY_COLOR).as_ref());
+        let secondary_attributes =
+            text_attributes(secondary_font.as_ref(), palette_color(SECONDARY_COLOR).as_ref());
+        let empty_attributes =
+            text_attributes(empty_font.as_ref(), palette_color(SECONDARY_COLOR).as_ref());
+        let text_metrics = RowTextMetrics {
+            primary_line_height: font_line_height(primary_font.as_ref()),
+            secondary_line_height: font_line_height(secondary_font.as_ref()),
+            empty_line_height: font_line_height(empty_font.as_ref()),
+        };
         let this = mtm.alloc().set_ivars(PaletteResultsViewIvars {
             state: RefCell::new(ResultsState::default()),
             callback,
@@ -360,6 +369,7 @@ impl PaletteResultsView {
             primary_attributes,
             secondary_attributes,
             empty_attributes,
+            text_metrics,
             icons: RefCell::new(HashMap::new()),
         });
         unsafe { msg_send![super(this), initWithFrame: frame] }
@@ -395,12 +405,13 @@ impl PaletteResultsView {
         let context = graphics.CGContext();
         let state = self.ivars().state.borrow();
         if state.rows.is_empty() {
+            let line_height = self.ivars().text_metrics.empty_line_height;
             unsafe {
                 NSString::from_str("No matching windows, apps, or commands")
                     .drawInRect_withAttributes(
                         CGRect::new(
-                            CGPoint::new(50.0, 14.0),
-                            CGSize::new(self.bounds().size.width - 64.0, 18.0),
+                            CGPoint::new(50.0, centered_origin(0.0, ROW_HEIGHT, line_height)),
+                            CGSize::new(self.bounds().size.width - 64.0, line_height),
                         ),
                         Some(self.ivars().empty_attributes.as_ref()),
                     );
@@ -410,6 +421,15 @@ impl PaletteResultsView {
         for index in visible_row_range(dirty_rect, state.rows.len()) {
             let row = &state.rows[index];
             let y = index as f64 * ROW_HEIGHT;
+            fill_rounded_rect(
+                context.as_ref(),
+                CGRect::new(
+                    CGPoint::new(9.0, y + ROW_HEIGHT - 0.5),
+                    CGSize::new(self.bounds().size.width - 22.0, 0.5),
+                ),
+                0.0,
+                (0.5, 0.56, 0.49, 0.14),
+            );
             if state.selected == Some(index) {
                 fill_rounded_rect(
                     context.as_ref(),
@@ -417,17 +437,33 @@ impl PaletteResultsView {
                         CGPoint::new(2.0, y + 2.0),
                         CGSize::new(self.bounds().size.width - 8.0, ROW_HEIGHT - 4.0),
                     ),
-                    8.0,
-                    (1.0, 1.0, 1.0, 0.055),
+                    3.0,
+                    (0.12, 0.23, 0.2, 0.72),
+                );
+                stroke_rounded_rect(
+                    context.as_ref(),
+                    CGRect::new(
+                        CGPoint::new(2.5, y + 2.5),
+                        CGSize::new(self.bounds().size.width - 9.0, ROW_HEIGHT - 5.0),
+                    ),
+                    3.0,
+                    (ACCENT_COLOR.0, ACCENT_COLOR.1, ACCENT_COLOR.2, 0.26),
+                    0.75,
                 );
                 fill_rounded_rect(
                     context.as_ref(),
-                    CGRect::new(CGPoint::new(3.0, y + 10.0), CGSize::new(2.5, ROW_HEIGHT - 20.0)),
-                    1.25,
-                    ACCENT_COLOR,
+                    CGRect::new(CGPoint::new(3.0, y + 8.0), CGSize::new(3.0, ROW_HEIGHT - 16.0)),
+                    1.5,
+                    SIGNAL_COLOR,
                 );
             }
 
+            let icon_bezel = CGRect::new(
+                CGPoint::new(10.5, y + (ROW_HEIGHT - 31.0) / 2.0),
+                CGSize::new(31.0, 31.0),
+            );
+            fill_rounded_rect(context.as_ref(), icon_bezel, 5.0, (0.025, 0.035, 0.03, 0.72));
+            stroke_rounded_rect(context.as_ref(), icon_bezel, 5.0, (0.55, 0.6, 0.52, 0.22), 0.75);
             let icon_rect = CGRect::new(
                 CGPoint::new(13.0, y + (ROW_HEIGHT - ICON_SIZE) / 2.0),
                 CGSize::new(ICON_SIZE, ICON_SIZE),
@@ -436,13 +472,27 @@ impl PaletteResultsView {
                 icon.drawInRect(icon_rect);
             } else {
                 let glyph = match row.kind {
-                    PaletteEntryKind::Window => "□",
-                    PaletteEntryKind::Application => "◉",
-                    PaletteEntryKind::Command => "›_",
+                    PaletteEntryKind::Window => "WIN",
+                    PaletteEntryKind::Application => "APP",
+                    PaletteEntryKind::Command => "CMD",
                 };
+                let glyph_rect = CGRect::new(
+                    CGPoint::new(
+                        icon_rect.origin.x + 2.0,
+                        centered_origin(
+                            icon_rect.origin.y,
+                            icon_rect.size.height,
+                            self.ivars().text_metrics.secondary_line_height,
+                        ),
+                    ),
+                    CGSize::new(
+                        icon_rect.size.width - 4.0,
+                        self.ivars().text_metrics.secondary_line_height,
+                    ),
+                );
                 unsafe {
                     NSString::from_str(glyph).drawInRect_withAttributes(
-                        icon_rect,
+                        glyph_rect,
                         Some(self.ivars().secondary_attributes.as_ref()),
                     );
                 }
@@ -454,7 +504,13 @@ impl PaletteResultsView {
                 metadata.sizeWithAttributes(Some(self.ivars().secondary_attributes.as_ref()))
             }
             .width;
-            let text_layout = row_text_layout(self.bounds().size.width, text_x, metadata_width, y);
+            let text_layout = row_text_layout(
+                self.bounds().size.width,
+                text_x,
+                metadata_width,
+                y,
+                self.ivars().text_metrics,
+            );
             unsafe {
                 NSString::from_str(&row.primary).drawWithRect_options_attributes_context(
                     text_layout.title,
@@ -480,7 +536,7 @@ impl PaletteResultsView {
                 context.as_ref(),
                 indicator,
                 indicator.size.width / 2.0,
-                (1.0, 1.0, 1.0, 0.28),
+                (SIGNAL_COLOR.0, SIGNAL_COLOR.1, SIGNAL_COLOR.2, 0.48),
             );
         }
     }
@@ -506,6 +562,7 @@ pub struct CommandPalettePanel {
     scroll_view: Retained<PaletteScrollView>,
     results_view: Retained<PaletteResultsView>,
     result_count: Retained<NSTextField>,
+    header_metrics: HeaderMetrics,
     _text_handler: Retained<PaletteTextHandler>,
     _window_handler: Retained<PaletteWindowHandler>,
     width: f64,
@@ -526,7 +583,7 @@ impl CommandPalettePanel {
         let mode = PalettePanelMode::Windows;
         let height = panel_height(max_visible_rows);
         let results_frame = results_viewport_frame(width, max_visible_rows);
-        let search_y = search_field_y(max_visible_rows);
+        let header_y = header_band_y(max_visible_rows);
         let frame = CGRect::new(CGPoint::ZERO, CGSize::new(width, height));
         let style = NSWindowStyleMask::Borderless | NSWindowStyleMask::NonactivatingPanel;
         let panel: Retained<PalettePanel> = unsafe {
@@ -554,10 +611,11 @@ impl CommandPalettePanel {
         let content = NSView::initWithFrame(mtm.alloc(), frame);
         content.setWantsLayer(true);
         if let Some(layer) = content.layer() {
-            layer.setCornerRadius(18.0);
+            layer.setCornerRadius(12.0);
             layer.setMasksToBounds(true);
-            layer.setBorderWidth(0.5);
-            let border = NSColor::colorWithWhite_alpha(1.0, 0.12).CGColor();
+            layer.setBorderWidth(1.0);
+            let border =
+                NSColor::colorWithSRGBRed_green_blue_alpha(0.44, 0.54, 0.47, 0.48).CGColor();
             layer.setBorderColor(Some(border.as_ref()));
         }
 
@@ -571,7 +629,7 @@ impl CommandPalettePanel {
         surface.setWantsLayer(true);
         if let Some(layer) = surface.layer() {
             layer.setBackgroundColor(Some(
-                NSColor::colorWithSRGBRed_green_blue_alpha(0.035, 0.05, 0.068, PANEL_TINT_ALPHA)
+                NSColor::colorWithSRGBRed_green_blue_alpha(0.045, 0.06, 0.052, PANEL_TINT_ALPHA)
                     .CGColor()
                     .as_ref(),
             ));
@@ -585,24 +643,15 @@ impl CommandPalettePanel {
 
         let brand_label =
             NSTextField::labelWithString(&NSString::from_str(mode.brand_label()), mtm);
-        brand_label.setFrame(header_brand_frame(search_y, mode));
         brand_label.setFont(Some(
-            NSFont::systemFontOfSize_weight(10.5, unsafe { NSFontWeightMedium }).as_ref(),
+            NSFont::monospacedSystemFontOfSize_weight(9.5, unsafe { NSFontWeightMedium }).as_ref(),
         ));
-        brand_label.setTextColor(Some(
-            NSColor::colorWithSRGBRed_green_blue_alpha(
-                ACCENT_COLOR.0,
-                ACCENT_COLOR.1,
-                ACCENT_COLOR.2,
-                0.9,
-            )
-            .as_ref(),
-        ));
+        brand_label.setTextColor(Some(palette_color(ACCENT_COLOR).as_ref()));
 
-        let search_frame = header_search_frame(width, search_y, mode);
+        let search_frame = header_search_frame(width, header_y, mode, SEARCH_FIELD_HEIGHT);
         let search_field = PaletteSearchField::new(mtm, search_frame, callback.clone());
         search_field
-            .setPlaceholderString(Some(&NSString::from_str("Search windows, apps, and commands")));
+            .setPlaceholderString(Some(&NSString::from_str("QUERY WINDOW / APP / COMMAND")));
         search_field.setBordered(false);
         search_field.setBezeled(false);
         search_field.setDrawsBackground(false);
@@ -611,9 +660,9 @@ impl CommandPalettePanel {
         search_field.setSelectable(true);
         search_field.setUsesSingleLineMode(true);
         search_field.setFont(Some(
-            NSFont::systemFontOfSize_weight(17.0, unsafe { NSFontWeightMedium }).as_ref(),
+            NSFont::monospacedSystemFontOfSize_weight(15.5, unsafe { NSFontWeightMedium }).as_ref(),
         ));
-        search_field.setTextColor(Some(NSColor::colorWithWhite_alpha(0.95, 1.0).as_ref()));
+        search_field.setTextColor(Some(palette_color(IVORY_COLOR).as_ref()));
 
         let results_view = PaletteResultsView::new(
             mtm,
@@ -628,12 +677,29 @@ impl CommandPalettePanel {
         scroll_view.setDocumentView(Some(&results_view));
 
         let result_count = NSTextField::labelWithString(&NSString::from_str("00"), mtm);
-        result_count.setFrame(header_count_frame(width, search_y));
         result_count.setFont(Some(
             NSFont::monospacedDigitSystemFontOfSize_weight(10.5, unsafe { NSFontWeightMedium })
                 .as_ref(),
         ));
-        result_count.setTextColor(Some(NSColor::colorWithWhite_alpha(0.48, 1.0).as_ref()));
+        result_count.setTextColor(Some(palette_color(SIGNAL_COLOR).as_ref()));
+
+        // NSTextFieldCell adds control-specific padding around its font metrics. Ask AppKit for
+        // each control's intrinsic single-line height, then center those actual control boxes in
+        // the shared header band. This keeps the label, editor/caret, and count geometrically
+        // aligned without font- or OS-specific offsets.
+        let header_metrics = HeaderMetrics {
+            brand_height: brand_label
+                .sizeThatFits(CGSize::new(mode.brand_width(), SEARCH_FIELD_HEIGHT))
+                .height,
+            search_height: search_field
+                .sizeThatFits(CGSize::new(search_frame.size.width, SEARCH_FIELD_HEIGHT))
+                .height,
+            count_height: result_count.sizeThatFits(CGSize::new(38.0, SEARCH_FIELD_HEIGHT)).height,
+        };
+        let header_layout = header_layout(width, header_y, mode, header_metrics);
+        brand_label.setFrame(header_layout.brand);
+        search_field.setFrame(header_layout.search);
+        result_count.setFrame(header_layout.count);
 
         content.addSubview(&backdrop);
         content.addSubview(&surface);
@@ -664,6 +730,7 @@ impl CommandPalettePanel {
             scroll_view,
             results_view,
             result_count,
+            header_metrics,
             _text_handler: text_handler,
             _window_handler: window_handler,
             width,
@@ -699,6 +766,10 @@ impl CommandPalettePanel {
         let text_field: &NSTextField = self.search_field.as_ref();
         let responder: &objc2_app_kit::NSResponder = text_field.as_ref();
         let responder_ready = self.panel.makeFirstResponder(Some(responder));
+        if let Some(editor) = self.search_field.currentEditor() {
+            let editor: Retained<NSTextView> = unsafe { Retained::cast_unchecked(editor) };
+            editor.setInsertionPointColor(Some(palette_color(ACCENT_COLOR).as_ref()));
+        }
         if let Ok(window_number) = u32::try_from(self.panel.windowNumber()) {
             let _ = window_server::make_key_window(
                 std::process::id() as i32,
@@ -721,7 +792,7 @@ impl CommandPalettePanel {
     pub fn render(&self, rows: Vec<PaletteRenderRow>, selected: Option<usize>) {
         self.layout_for_result_count(rows.len());
         self.result_count
-            .setStringValue(&NSString::from_str(&format!("{:02}", rows.len())));
+            .setStringValue(&NSString::from_str(&format!("CH {:02}", rows.len())));
         self.results_view.set_rows(rows, selected);
     }
 
@@ -746,11 +817,12 @@ impl CommandPalettePanel {
         self.ambient_glow.setFrame(CGRect::new(CGPoint::ZERO, frame.size));
         self.ambient_glow.setNeedsDisplay(true);
 
-        let search_y = search_field_y(visible_rows);
+        let header_y = header_band_y(visible_rows);
         let mode = self.mode.get();
-        self.brand_label.setFrame(header_brand_frame(search_y, mode));
-        self.search_field.setFrame(header_search_frame(self.width, search_y, mode));
-        self.result_count.setFrame(header_count_frame(self.width, search_y));
+        let header_layout = header_layout(self.width, header_y, mode, self.header_metrics);
+        self.brand_label.setFrame(header_layout.brand);
+        self.search_field.setFrame(header_layout.search);
+        self.result_count.setFrame(header_layout.count);
 
         let results_frame = results_viewport_frame(self.width, visible_rows);
         self.scroll_view.setFrame(results_frame);
@@ -760,9 +832,17 @@ impl CommandPalettePanel {
     fn set_mode(&self, mode: PalettePanelMode) {
         self.mode.set(mode);
         self.brand_label.setStringValue(&NSString::from_str(mode.brand_label()));
-        let search_y = self.search_field.frame().origin.y;
-        self.brand_label.setFrame(header_brand_frame(search_y, mode));
-        self.search_field.setFrame(header_search_frame(self.width, search_y, mode));
+        let visible_rows = ((self.scroll_view.frame().size.height / ROW_HEIGHT).round() as usize)
+            .clamp(1, self.max_visible_rows);
+        let header_layout = header_layout(
+            self.width,
+            header_band_y(visible_rows),
+            mode,
+            self.header_metrics,
+        );
+        self.brand_label.setFrame(header_layout.brand);
+        self.search_field.setFrame(header_layout.search);
+        self.result_count.setFrame(header_layout.count);
     }
 
     fn start_ambient_glow(&self) {
@@ -812,11 +892,32 @@ fn panel_height(visible_rows: usize) -> f64 {
         + TOP_PADDING
 }
 
-fn search_field_y(visible_rows: usize) -> f64 {
-    RESULTS_BOTTOM_PADDING
-        + visible_rows.max(1) as f64 * ROW_HEIGHT
-        + SEARCH_RESULTS_GAP
-        + SEARCH_TEXT_VERTICAL_OFFSET
+fn header_band_y(visible_rows: usize) -> f64 {
+    RESULTS_BOTTOM_PADDING + visible_rows.max(1) as f64 * ROW_HEIGHT + SEARCH_RESULTS_GAP
+}
+
+fn header_band_frame(bounds: CGRect) -> CGRect {
+    CGRect::new(
+        CGPoint::new(
+            bounds.origin.x,
+            bounds.origin.y + bounds.size.height - TOP_PADDING - SEARCH_FIELD_HEIGHT,
+        ),
+        CGSize::new(bounds.size.width, SEARCH_FIELD_HEIGHT),
+    )
+}
+
+fn header_chrome_frame(bounds: CGRect) -> CGRect {
+    let band = header_band_frame(bounds);
+    CGRect::new(
+        CGPoint::new(
+            bounds.origin.x + HEADER_CHROME_HORIZONTAL_INSET,
+            band.origin.y - HEADER_CHROME_VERTICAL_PADDING,
+        ),
+        CGSize::new(
+            bounds.size.width - HEADER_CHROME_HORIZONTAL_INSET * 2.0,
+            band.size.height + HEADER_CHROME_VERTICAL_PADDING * 2.0,
+        ),
+    )
 }
 
 fn results_viewport_frame(width: f64, visible_rows: usize) -> CGRect {
@@ -829,26 +930,59 @@ fn results_viewport_frame(width: f64, visible_rows: usize) -> CGRect {
     )
 }
 
-fn header_brand_frame(search_y: f64, mode: PalettePanelMode) -> CGRect {
-    CGRect::new(
-        CGPoint::new(PANEL_PADDING + 3.0, search_y + HEADER_AUXILIARY_VERTICAL_OFFSET),
-        CGSize::new(mode.brand_width(), 14.0),
-    )
+#[derive(Debug, Clone, Copy, PartialEq)]
+struct HeaderMetrics {
+    brand_height: f64,
+    search_height: f64,
+    count_height: f64,
 }
 
-fn header_search_frame(width: f64, search_y: f64, mode: PalettePanelMode) -> CGRect {
+#[derive(Debug, Clone, Copy, PartialEq)]
+struct HeaderLayout {
+    brand: CGRect,
+    search: CGRect,
+    count: CGRect,
+}
+
+fn header_layout(
+    width: f64,
+    header_y: f64,
+    mode: PalettePanelMode,
+    metrics: HeaderMetrics,
+) -> HeaderLayout {
+    HeaderLayout {
+        brand: CGRect::new(
+            CGPoint::new(
+                PANEL_PADDING + 3.0,
+                centered_origin(header_y, SEARCH_FIELD_HEIGHT, metrics.brand_height),
+            ),
+            CGSize::new(mode.brand_width(), metrics.brand_height),
+        ),
+        search: header_search_frame(width, header_y, mode, metrics.search_height),
+        count: CGRect::new(
+            CGPoint::new(
+                width - 51.0,
+                centered_origin(header_y, SEARCH_FIELD_HEIGHT, metrics.count_height),
+            ),
+            CGSize::new(38.0, metrics.count_height),
+        ),
+    }
+}
+
+fn header_search_frame(width: f64, header_y: f64, mode: PalettePanelMode, height: f64) -> CGRect {
     let search_x = PANEL_PADDING + mode.brand_width() + 10.0;
     CGRect::new(
-        CGPoint::new(search_x, search_y),
-        CGSize::new((width - search_x - 58.0).max(0.0), SEARCH_FIELD_HEIGHT),
+        CGPoint::new(search_x, centered_origin(header_y, SEARCH_FIELD_HEIGHT, height)),
+        CGSize::new((width - search_x - 58.0).max(0.0), height),
     )
 }
 
-fn header_count_frame(width: f64, search_y: f64) -> CGRect {
-    CGRect::new(
-        CGPoint::new(width - 40.0, search_y + HEADER_AUXILIARY_VERTICAL_OFFSET),
-        CGSize::new(24.0, 14.0),
-    )
+fn centered_origin(container_origin: f64, container_size: f64, content_size: f64) -> f64 {
+    container_origin + (container_size - content_size) / 2.0
+}
+
+fn font_line_height(font: &NSFont) -> f64 {
+    (font.ascender() - font.descender() + font.leading()).ceil()
 }
 
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -857,11 +991,19 @@ struct RowTextLayout {
     metadata: CGRect,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq)]
+struct RowTextMetrics {
+    primary_line_height: f64,
+    secondary_line_height: f64,
+    empty_line_height: f64,
+}
+
 fn row_text_layout(
     view_width: f64,
     text_x: f64,
     measured_metadata_width: f64,
     row_y: f64,
+    metrics: RowTextMetrics,
 ) -> RowTextLayout {
     let right_padding = 15.0;
     let column_gap = 18.0;
@@ -874,12 +1016,18 @@ fn row_text_layout(
 
     RowTextLayout {
         title: CGRect::new(
-            CGPoint::new(text_x, row_y + 11.0),
-            CGSize::new(title_width, 20.0),
+            CGPoint::new(
+                text_x,
+                centered_origin(row_y, ROW_HEIGHT, metrics.primary_line_height),
+            ),
+            CGSize::new(title_width, metrics.primary_line_height),
         ),
         metadata: CGRect::new(
-            CGPoint::new(metadata_x, row_y + 13.0),
-            CGSize::new(metadata_width, 16.0),
+            CGPoint::new(
+                metadata_x,
+                centered_origin(row_y, ROW_HEIGHT, metrics.secondary_line_height),
+            ),
+            CGSize::new(metadata_width, metrics.secondary_line_height),
         ),
     }
 }
@@ -899,8 +1047,8 @@ fn scroll_indicator_frame(document_height: f64, visible_rect: CGRect) -> Option<
     let thumb_y =
         visible_rect.origin.y + track_inset + progress * (track_height - thumb_height).max(0.0);
     Some(CGRect::new(
-        CGPoint::new(visible_rect.origin.x + visible_rect.size.width - 3.5, thumb_y),
-        CGSize::new(2.5, thumb_height),
+        CGPoint::new(visible_rect.origin.x + visible_rect.size.width - 3.0, thumb_y),
+        CGSize::new(2.0, thumb_height),
     ))
 }
 
@@ -977,6 +1125,59 @@ fn ambient_glow_geometry() -> (CGPoint, CGPoint) {
     )
 }
 
+fn draw_cassette_chrome(bounds: CGRect) {
+    let Some(graphics) = NSGraphicsContext::currentContext() else {
+        return;
+    };
+    let context = graphics.CGContext();
+    let context = context.as_ref();
+    let header = header_chrome_frame(bounds);
+    fill_rounded_rect(context, header, 4.0, (0.018, 0.03, 0.026, 0.68));
+    stroke_rounded_rect(context, header, 4.0, (0.46, 0.57, 0.49, 0.28), 0.75);
+
+    fill_rounded_rect(
+        context,
+        CGRect::new(
+            CGPoint::new(
+                bounds.origin.x + 16.0,
+                bounds.origin.y + bounds.size.height - 9.0,
+            ),
+            CGSize::new(bounds.size.width * 0.38, 1.0),
+        ),
+        0.0,
+        (ACCENT_COLOR.0, ACCENT_COLOR.1, ACCENT_COLOR.2, 0.52),
+    );
+    fill_rounded_rect(
+        context,
+        CGRect::new(
+            CGPoint::new(
+                bounds.origin.x + 18.0 + bounds.size.width * 0.38,
+                bounds.origin.y + bounds.size.height - 9.0,
+            ),
+            CGSize::new(38.0, 1.0),
+        ),
+        0.0,
+        (SIGNAL_COLOR.0, SIGNAL_COLOR.1, SIGNAL_COLOR.2, 0.82),
+    );
+
+    let slot_y = bounds.origin.y + 5.0;
+    for index in 0..3 {
+        fill_rounded_rect(
+            context,
+            CGRect::new(
+                CGPoint::new(bounds.origin.x + 20.0 + index as f64 * 10.0, slot_y),
+                CGSize::new(6.0, 1.5),
+            ),
+            0.75,
+            (0.54, 0.59, 0.51, 0.26),
+        );
+    }
+}
+
+fn palette_color(color: (f64, f64, f64, f64)) -> Retained<NSColor> {
+    NSColor::colorWithSRGBRed_green_blue_alpha(color.0, color.1, color.2, color.3)
+}
+
 fn text_attributes(
     font: &NSFont,
     color: &NSColor,
@@ -1001,6 +1202,25 @@ fn as_any_object<T: Message>(object: &T) -> &AnyObject {
 }
 
 fn fill_rounded_rect(context: &CGContext, rect: CGRect, radius: f64, color: (f64, f64, f64, f64)) {
+    add_rounded_rect_path(context, rect, radius);
+    CGContext::set_rgb_fill_color(Some(context), color.0, color.1, color.2, color.3);
+    CGContext::fill_path(Some(context));
+}
+
+fn stroke_rounded_rect(
+    context: &CGContext,
+    rect: CGRect,
+    radius: f64,
+    color: (f64, f64, f64, f64),
+    width: f64,
+) {
+    add_rounded_rect_path(context, rect, radius);
+    CGContext::set_rgb_stroke_color(Some(context), color.0, color.1, color.2, color.3);
+    CGContext::set_line_width(Some(context), width);
+    CGContext::stroke_path(Some(context));
+}
+
+fn add_rounded_rect_path(context: &CGContext, rect: CGRect, radius: f64) {
     let radius = radius.min(rect.size.width / 2.0).min(rect.size.height / 2.0);
     CGContext::begin_path(Some(context));
     CGContext::move_to_point(Some(context), rect.origin.x + radius, rect.origin.y);
@@ -1037,8 +1257,6 @@ fn fill_rounded_rect(context: &CGContext, rect: CGRect, radius: f64, color: (f64
         radius,
     );
     CGContext::close_path(Some(context));
-    CGContext::set_rgb_fill_color(Some(context), color.0, color.1, color.2, color.3);
-    CGContext::fill_path(Some(context));
 }
 
 #[cfg(test)]
@@ -1069,11 +1287,30 @@ mod tests {
     }
 
     #[test]
+    fn header_chrome_uses_the_control_band_and_does_not_overlap_results() {
+        let visible_rows = 8;
+        let bounds = CGRect::new(CGPoint::ZERO, CGSize::new(640.0, panel_height(visible_rows)));
+        let band = header_band_frame(bounds);
+        let chrome = header_chrome_frame(bounds);
+        let results = results_viewport_frame(bounds.size.width, visible_rows);
+        let center = |rect: CGRect| rect.origin.y + rect.size.height / 2.0;
+
+        assert_eq!(band.origin.y, header_band_y(visible_rows));
+        assert_eq!(center(chrome), center(band));
+        assert_eq!(
+            chrome.origin.y - (results.origin.y + results.size.height),
+            SEARCH_RESULTS_GAP - HEADER_CHROME_VERTICAL_PADDING
+        );
+        assert!(chrome.origin.y > results.origin.y + results.size.height);
+        assert!(chrome.origin.y + chrome.size.height < bounds.origin.y + bounds.size.height);
+    }
+
+    #[test]
     fn custom_scroll_indicator_stays_thin_and_tracks_the_visible_rect() {
         let visible = CGRect::new(CGPoint::new(0.0, 220.0), CGSize::new(616.0, ROW_HEIGHT * 8.0));
         let indicator = scroll_indicator_frame(ROW_HEIGHT * 25.0, visible).unwrap();
 
-        assert_eq!(indicator.size.width, 2.5);
+        assert_eq!(indicator.size.width, 2.0);
         assert!(indicator.size.height >= 22.0);
         assert!(indicator.origin.y > visible.origin.y);
         assert!(
@@ -1084,7 +1321,12 @@ mod tests {
 
     #[test]
     fn row_layout_reserves_complete_metadata_before_truncating_the_title() {
-        let layout = row_text_layout(616.0, 51.0, 210.4, 0.0);
+        let metrics = RowTextMetrics {
+            primary_line_height: 18.0,
+            secondary_line_height: 13.0,
+            empty_line_height: 14.0,
+        };
+        let layout = row_text_layout(616.0, 51.0, 210.4, 0.0, metrics);
 
         assert_eq!(layout.metadata.size.width, 211.0);
         assert_eq!(layout.metadata.origin.x + layout.metadata.size.width, 601.0);
@@ -1092,34 +1334,45 @@ mod tests {
             layout.title.origin.x + layout.title.size.width + 18.0,
             layout.metadata.origin.x
         );
+        assert_eq!(
+            layout.title.origin.y + layout.title.size.height / 2.0,
+            ROW_HEIGHT / 2.0
+        );
+        assert_eq!(
+            layout.metadata.origin.y + layout.metadata.size.height / 2.0,
+            ROW_HEIGHT / 2.0
+        );
 
-        let constrained = row_text_layout(300.0, 51.0, 400.0, 0.0);
+        let constrained = row_text_layout(300.0, 51.0, 400.0, 0.0, metrics);
         assert_eq!(constrained.title.size.width, MIN_TITLE_WIDTH);
     }
 
     #[test]
-    fn compact_header_optically_centers_auxiliary_labels() {
-        let search_y = 100.0;
+    fn header_controls_share_the_band_center_despite_different_intrinsic_heights() {
+        let header_y = 100.0;
+        let layout = header_layout(640.0, header_y, PalettePanelMode::Windows, HeaderMetrics {
+            brand_height: 12.0,
+            search_height: 19.0,
+            count_height: 13.0,
+        });
+        let expected_center = header_y + SEARCH_FIELD_HEIGHT / 2.0;
 
-        assert_eq!(
-            header_brand_frame(search_y, PalettePanelMode::Windows).origin.y,
-            search_y + HEADER_AUXILIARY_VERTICAL_OFFSET
-        );
-        assert_eq!(
-            header_count_frame(640.0, search_y).origin.y,
-            search_y + HEADER_AUXILIARY_VERTICAL_OFFSET
-        );
+        for frame in [layout.brand, layout.search, layout.count] {
+            assert_eq!(frame.origin.y + frame.size.height / 2.0, expected_center);
+        }
     }
 
     #[test]
     fn commands_header_reserves_space_before_the_search_field() {
-        let search_y = 100.0;
-        let brand = header_brand_frame(search_y, PalettePanelMode::Commands);
-        let search = header_search_frame(640.0, search_y, PalettePanelMode::Commands);
+        let layout = header_layout(640.0, 100.0, PalettePanelMode::Commands, HeaderMetrics {
+            brand_height: 12.0,
+            search_height: 19.0,
+            count_height: 13.0,
+        });
 
         assert!(
-            brand.size.width == PalettePanelMode::Commands.brand_width()
-                && search.origin.x >= brand.origin.x + brand.size.width
+            layout.brand.size.width == PalettePanelMode::Commands.brand_width()
+                && layout.search.origin.x >= layout.brand.origin.x + layout.brand.size.width
         );
     }
 
