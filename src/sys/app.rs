@@ -468,12 +468,12 @@ impl WindowInfo {
             subrole,
             minimized: is_minimized,
             title,
+            identifier: ax_identifier,
         } = element.window_attributes()?;
         let is_standard = role == AX_WINDOW_ROLE && subrole == AX_STANDARD_WINDOW_SUBROLE;
 
         let ax_role = Some(role);
         let ax_subrole = Some(subrole);
-        let ax_identifier = element.identifier().ok();
 
         let mut server_info = server_info_hint;
         let id = server_info
