@@ -718,9 +718,13 @@ pub struct UiSettings {
     #[serde(default)]
     pub menu_bar: MenuBarSettings,
     #[serde(default)]
+    pub border: BorderSettings,
+    #[serde(default)]
     pub stack_line: StackLineSettings,
     #[serde(default)]
     pub mission_control: MissionControlSettings,
+    #[serde(default)]
+    pub command_palette: CommandPaletteSettings,
 }
 
 #[derive(Serialize, Deserialize, Debug, PartialEq, Clone, ConfigSchema)]
@@ -996,6 +1000,57 @@ impl Default for MenuBarSettings {
     }
 }
 
+/// Focused-window border rendered by Rift.
+#[derive(Serialize, Deserialize, Debug, PartialEq, Clone, Copy)]
+#[serde(deny_unknown_fields)]
+pub struct BorderSettings {
+    #[serde(default = "no")]
+    pub enabled: bool,
+    #[serde(default = "default_border_width")]
+    pub width: f64,
+    /// Color encoded as ARGB, for example `0xfff37021`.
+    #[serde(default = "default_border_color")]
+    pub color: u32,
+    #[serde(default = "default_border_corner_radius")]
+    pub corner_radius: f64,
+    #[serde(default = "yes")]
+    pub adaptive_corner_radius: bool,
+    #[serde(default = "yes")]
+    pub hidpi: bool,
+}
+
+impl Default for BorderSettings {
+    fn default() -> Self {
+        Self {
+            enabled: false,
+            width: default_border_width(),
+            color: default_border_color(),
+            corner_radius: default_border_corner_radius(),
+            adaptive_corner_radius: true,
+            hidpi: true,
+        }
+    }
+}
+
+impl BorderSettings {
+    pub fn validate(&self) -> Vec<String> {
+        let mut issues = Vec::new();
+        if !self.width.is_finite() || self.width <= 0.0 {
+            issues.push(format!(
+                "ui.border.width must be finite and positive, got {}",
+                self.width
+            ));
+        }
+        if !self.corner_radius.is_finite() || self.corner_radius < 0.0 {
+            issues.push(format!(
+                "ui.border.corner_radius must be finite and non-negative, got {}",
+                self.corner_radius
+            ));
+        }
+        issues
+    }
+}
+
 #[derive(Serialize, Deserialize, Debug, PartialEq, Clone, ConfigSchema)]
 #[serde(deny_unknown_fields)]
 pub struct StackLineSettings {
@@ -1195,11 +1250,56 @@ pub struct MissionControlSettings {
     pub fade_duration_ms: f64,
 }
 
+#[derive(Serialize, Deserialize, Debug, PartialEq, Clone, Copy)]
+#[serde(deny_unknown_fields)]
+pub struct CommandPaletteSettings {
+    #[serde(default = "no")]
+    pub enabled: bool,
+    /// Number of result rows visible before the complete result set scrolls.
+    #[serde(default = "default_command_palette_max_results")]
+    pub max_results: usize,
+    #[serde(default = "default_command_palette_width")]
+    pub width: f64,
+}
+
+impl Default for CommandPaletteSettings {
+    fn default() -> Self {
+        Self {
+            enabled: false,
+            max_results: default_command_palette_max_results(),
+            width: default_command_palette_width(),
+        }
+    }
+}
+
+impl CommandPaletteSettings {
+    pub fn validate(&self) -> Vec<String> {
+        let mut issues = Vec::new();
+        if !(1..=20).contains(&self.max_results) {
+            issues.push(format!(
+                "ui.command_palette.max_results must be between 1 and 20, got {}",
+                self.max_results
+            ));
+        }
+        if !self.width.is_finite() || self.width < 360.0 {
+            issues.push(format!(
+                "ui.command_palette.width must be finite and at least 360, got {}",
+                self.width
+            ));
+        }
+        issues
+    }
+}
+
 fn default_mission_control_fade_duration_ms() -> f64 { 180.0 }
 
 fn default_drop_zone_fraction() -> f64 { 0.25 }
 
 fn default_mouse_action_none() -> MouseAction { MouseAction::None }
+
+fn default_command_palette_max_results() -> usize { 8 }
+
+fn default_command_palette_width() -> f64 { 640.0 }
 
 fn default_master_stack_ratio() -> f64 { 0.6 }
 
@@ -1673,6 +1773,8 @@ impl Settings {
 
         issues.extend(self.layout.validate());
         issues.extend(self.ui.stack_line.validate());
+        issues.extend(self.ui.border.validate());
+        issues.extend(self.ui.command_palette.validate());
 
         if !(0.10..=0.45).contains(&self.drag_drop.drop_zone_fraction) {
             issues.push(format!(
@@ -1945,6 +2047,10 @@ fn default_swipe_vertical_tolerance() -> f64 { 0.4 }
 fn default_swipe_fingers() -> usize { 3 }
 fn default_distance_pct() -> f64 { 0.08 }
 fn default_overscroll_threshold() -> f64 { 0.55 }
+
+fn default_border_width() -> f64 { 4.0 }
+fn default_border_color() -> u32 { 0xfff3_7021 }
+fn default_border_corner_radius() -> f64 { 10.0 }
 
 #[derive(Serialize, Deserialize, Debug, PartialEq, Clone, Copy, Default, ConfigEnum)]
 #[serde(rename_all = "snake_case")]

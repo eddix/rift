@@ -27,7 +27,6 @@ use objc2_foundation::{
 };
 use tokio::sync::mpsc::UnboundedSender;
 
-use crate::actor::menu_bar::{DisplayWorkspaces, Workspace};
 use crate::actor::reactor::{
     Command as ReactorTopCommand, Event as ReactorEvent, ReactorCommand, Sender as ReactorSender,
 };
@@ -37,6 +36,8 @@ use crate::common::config::{
     WorkspaceSelector, restore_file,
 };
 use crate::layout_engine::{LayoutCommand, LayoutEngine, RestoreScope, RestoreSource};
+use crate::model::projection::DisplayWorkspaceContext;
+use crate::model::server::RuntimeWorkspaceData;
 use crate::sys::hotkey::{Hotkey, KeyCode, Modifiers};
 use crate::sys::screen::SpaceId;
 use crate::ui::common::compute_window_layout_metrics;
@@ -296,7 +297,7 @@ impl MenuIcon {
 
     pub fn update_status_icon(
         &mut self,
-        displays: &[DisplayWorkspaces],
+        displays: &[DisplayWorkspaceContext],
         settings: &MenuBarSettings,
         binding_mode: &str,
     ) {
@@ -391,7 +392,7 @@ struct WorkspaceRenderInput<'a> {
 }
 
 fn render_inputs<'a>(
-    displays: &'a [DisplayWorkspaces],
+    displays: &'a [DisplayWorkspaceContext],
     settings: &MenuBarSettings,
 ) -> Vec<WorkspaceRenderInput<'a>> {
     let show_windows = settings.display_style == WorkspaceDisplayStyle::Layout;
@@ -1330,9 +1331,9 @@ mod layout_library_tests {
         assert_eq!(centered_origin(-2.0, 15.0, 5.0), 3.0);
     }
 
-    fn displays() -> Vec<DisplayWorkspaces> {
+    fn displays() -> Vec<DisplayWorkspaceContext> {
         (1..=2)
-            .map(|number| DisplayWorkspaces {
+            .map(|number| DisplayWorkspaceContext {
                 display_uuid: format!("display-{number}"),
                 space: SpaceId::new(number),
                 is_active_context: number == 1,

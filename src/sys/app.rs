@@ -397,7 +397,7 @@ impl From<&NSRunningApplication> for AppInfo {
     }
 }
 
-#[derive(Serialize, Deserialize, Debug, Clone)]
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq)]
 pub struct WindowInfo {
     #[serde(default)]
     pub has_native_tabs: bool,

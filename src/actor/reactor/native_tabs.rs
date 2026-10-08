@@ -94,10 +94,12 @@ impl Reactor {
             return false;
         }
         #[cfg(not(test))]
-        let successor = window_server::key_focused_window(space).and_then(|native| {
-            let frame = window_server::get_window(WindowServerId::new(native.idx.get()))?.frame;
-            Some((native, frame))
-        });
+        let successor = window_server::key_focused_window()
+            .filter(|(_, focused_space)| *focused_space == space)
+            .and_then(|(native, _)| {
+                let frame = window_server::get_window(WindowServerId::new(native.idx.get()))?.frame;
+                Some((native, frame))
+            });
         #[cfg(test)]
         let successor = self.native_tab_successor;
         let Some((native, frame)) = successor else { return false };

@@ -16,11 +16,12 @@ use tracing::{debug, warn};
 
 use super::skylight::{
     CFRelease, CFUUIDCreateFromString, CFUUIDCreateString, CGDisplayCreateUUIDFromDisplayID,
-    CGDisplayGetDisplayIDFromUUID, CGDisplayIsBuiltin, CGSCopyBestManagedDisplayForRect, CGSCopyManagedDisplaySpaces,
-    CGSCopyManagedDisplays, CGSCopySpaces, CGSGetActiveSpace, CGSManagedDisplayGetCurrentSpace,
-    CGSSpaceMask, CoreDockGetAutoHideEnabled, CoreDockGetOrientationAndPinning,
-    SLSCopyActiveMenuBarDisplayIdentifier, SLSGetDisplayMenubarHeight, SLSGetDockRectWithReason,
-    SLSGetMenuBarAutohideEnabled, SLSGetSpaceManagementMode,
+    CGDisplayGetDisplayIDFromUUID, CGDisplayIsBuiltin, CGSCopyBestManagedDisplayForRect,
+    CGSCopyManagedDisplaySpaces, CGSCopyManagedDisplays, CGSCopySpaces, CGSGetActiveSpace,
+    CGSManagedDisplayGetCurrentSpace, CGSSpaceMask, CoreDockGetAutoHideEnabled,
+    CoreDockGetOrientationAndPinning, SLSCopyActiveMenuBarDisplayIdentifier,
+    SLSGetDisplayMenubarHeight, SLSGetDockRectWithReason, SLSGetMenuBarAutohideEnabled,
+    SLSGetSpaceManagementMode,
 };
 use crate::common::collections::HashMap;
 use crate::sys::geometry::CGRectDef;

@@ -5,7 +5,7 @@ use serde::Deserialize;
 use super::parse::migrate_legacy_resize_bindings;
 use super::*;
 use crate::actor::reactor;
-use crate::actor::wm_controller::WmCommand;
+use crate::actor::wm_controller::{WmCmd, WmCommand};
 use crate::common::collections::HashMap;
 use crate::layout_engine::{LayoutCommand, ResizeOrientation};
 use crate::sys::hotkey::Modifiers;
@@ -978,4 +978,93 @@ fn unmanaged_focus_commands_parse_from_key_bindings() {
         )
     );
 
+}
+
+
+#[test]
+fn command_palette_toggle_parses_from_key_bindings() {
+    #[derive(Deserialize)]
+    struct TestConfig {
+        keys: HashMap<String, WmCommand>,
+    }
+
+    let config: TestConfig = toml::from_str(
+        r#"
+        [keys]
+        palette = "toggle_command_palette"
+        commands = "toggle_command_palette_commands"
+        "#,
+    )
+    .unwrap();
+
+    assert_eq!(
+        (&config.keys["palette"], &config.keys["commands"]),
+        (
+            &WmCommand::Wm(WmCmd::ToggleCommandPalette),
+            &WmCommand::Wm(WmCmd::ToggleCommandPaletteCommands),
+        )
+    );
+}
+
+
+#[test]
+fn border_settings_default_to_the_local_janky_borders_style() {
+    let settings: BorderSettings = toml::from_str("").unwrap();
+
+    assert_eq!(settings, BorderSettings {
+        enabled: false,
+        width: 4.0,
+        color: 0xfff3_7021,
+        corner_radius: 10.0,
+        adaptive_corner_radius: true,
+        hidpi: true,
+    });
+}
+
+
+#[test]
+fn border_settings_validation_rejects_invalid_geometry() {
+    let settings = BorderSettings {
+        width: 0.0,
+        corner_radius: f64::NAN,
+        ..BorderSettings::default()
+    };
+
+    assert_eq!(settings.validate().len(), 2);
+}
+
+
+#[test]
+fn border_settings_can_disable_adaptive_corner_radius() {
+    let settings: BorderSettings =
+        toml::from_str("adaptive_corner_radius = false\ncorner_radius = 14.0").unwrap();
+
+    assert_eq!(
+        (settings.adaptive_corner_radius, settings.corner_radius),
+        (false, 14.0)
+    );
+}
+
+
+#[test]
+fn command_palette_settings_default_to_eight_visible_rows() {
+    let settings: CommandPaletteSettings = toml::from_str("").unwrap();
+
+    assert_eq!(settings, CommandPaletteSettings {
+        enabled: false,
+        max_results: 8,
+        width: 640.0,
+    });
+}
+
+
+#[test]
+fn command_palette_settings_reject_invalid_size_limits() {
+    let settings = CommandPaletteSettings {
+        max_results: 0,
+        width: 200.0,
+        ..CommandPaletteSettings::default()
+    };
+
+    assert_eq!(settings.validate().len(), 2);
 }

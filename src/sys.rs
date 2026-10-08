@@ -6,6 +6,7 @@ pub mod accessibility;
 pub mod app;
 pub mod axuielement;
 pub mod carbon;
+pub mod cgs_window;
 #[cfg(feature = "custom-event-loop")]
 mod cocoa;
 
