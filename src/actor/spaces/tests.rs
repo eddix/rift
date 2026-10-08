@@ -5,6 +5,7 @@ use crate::actor::reactor::Reactor;
 
 fn screen(id: u32, display: &str, space: u64) -> ScreenInfo {
     ScreenInfo {
+        is_builtin: id == 1,
         id: crate::sys::screen::ScreenId::new(id),
         display_uuid: display.into(),
         name: None,
