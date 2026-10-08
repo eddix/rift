@@ -3895,6 +3895,31 @@ impl Reactor {
             self.send_layout_event(LayoutEvent::WindowRemoved(wid));
             return;
         }
+        let previous_assignment = self.state.windows.workspace_info_for_window(wid);
+        if previous_assignment.is_some_and(|assignment| assignment.space != space)
+            && !self.is_in_drag()
+            && let Some(affinity_space) = self.workspace_affinity_space(wid)
+            && affinity_space != space
+        {
+            if let Some(wsid) = self.state.windows.window(wid).and_then(|window| window.info.sys_id)
+            {
+                self.state.windows.observe_native_space(
+                    wsid,
+                    affinity_space,
+                    self.is_space_active(affinity_space),
+                );
+            }
+            if self.is_space_active(affinity_space) && self.state.windows.is_visible_admitted(wid) {
+                self.send_layout_event(LayoutEvent::WindowAdded(affinity_space, wid));
+            }
+            trace!(
+                ?wid,
+                ?space,
+                ?affinity_space,
+                "Ignored native-space report that conflicts with workspace display affinity"
+            );
+            return;
+        }
         if self.assigned_space_for_window_id(wid) != Some(space) {
             self.send_layout_event(LayoutEvent::WindowRemovedPreserveFloating(wid));
             let engine = &mut self.layout_manager.layout_engine;
@@ -4545,8 +4570,12 @@ impl Reactor {
     }
 
     fn workspace_affinity_matches_space(&self, window: WindowId, target_space: SpaceId) -> bool {
+        self.workspace_affinity_space(window) == Some(target_space)
+    }
+
+    fn workspace_affinity_space(&self, window: WindowId) -> Option<SpaceId> {
         let Some(assignment) = self.state.windows.workspace_info_for_window(window) else {
-            return false;
+            return None;
         };
         let Some(workspace_index) = self
             .layout_manager
@@ -4554,11 +4583,10 @@ impl Reactor {
             .workspaces()
             .workspace_index(assignment.space, assignment.workspace_id)
         else {
-            return false;
+            return None;
         };
         self.preferred_screen_for_workspace(workspace_index)
             .and_then(|screen| screen.space)
-            == Some(target_space)
     }
 
     fn handle_app_activation_workspace_switch(

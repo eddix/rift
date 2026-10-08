@@ -935,7 +935,7 @@ fn direct_workspace_switch_refocuses_active_workspace_on_other_display() {
 }
 
 #[test]
-fn move_window_to_workspace_crosses_to_its_affinity_display() {
+fn move_window_to_affinity_display_keeps_resident_window_in_target_workspace() {
     let (mut apps, mut reactor) = test_context();
     reactor.config.virtual_workspaces.workspace_display_rules = vec![WorkspaceDisplayRule {
         workspace: WorkspaceSelector::Index(1),
@@ -951,7 +951,14 @@ fn move_window_to_workspace_crosses_to_its_affinity_display() {
     ]));
     apps.make_app_and_settle(&mut reactor, 1, make_windows(1));
     let window = WindowId::new(1, 1);
+    let resident = WindowId::new(2, 1);
+    let resident_wsid = WindowServerId::new(900_002);
     let target_workspace = reactor.test_workspace(external_space, 1);
+    reactor.add_test_app(resident.pid);
+    reactor.add_test_window(resident, resident_wsid, Some(external_space), external);
+    reactor.mark_test_window_visible_in_space(resident_wsid, external_space);
+    assert!(reactor.assign_test_window_to_workspace(external_space, resident, target_workspace,));
+    reactor.send_layout_event(LayoutEvent::WindowAdded(external_space, resident));
 
     reactor.handle_test_layout_command(LayoutCommand::MoveWindowToWorkspace {
         workspace: WorkspaceSelector::Index(1),
@@ -959,21 +966,39 @@ fn move_window_to_workspace_crosses_to_its_affinity_display() {
         window_id: Some(window.idx.get()),
     });
     apps.simulate_until_quiet(&mut reactor);
+    reactor
+        .state
+        .windows
+        .set_window_server_space(resident_wsid, Some(builtin_space));
+    reactor.reconcile_windows_in_authoritative_active_snapshot(
+        &[(resident_wsid, Some(builtin_space))],
+        &[],
+    );
+    let moved_frame = reactor.state.windows.window(window).unwrap().frame_monotonic;
+    let resident_frame = reactor.state.windows.window(resident).unwrap().frame_monotonic;
 
     assert_eq!(
         (
             reactor.assigned_space_for_window_id(window),
             reactor.state.windows.workspace_for_window(external_space, window),
+            reactor.state.windows.workspace_for_window(external_space, resident),
+            reactor.assigned_space_for_window_id(resident),
             reactor
                 .layout_manager
                 .layout_engine
                 .workspaces()
                 .active_workspace(external_space),
+            external.contains(moved_frame.mid()),
+            external.contains(resident_frame.mid()),
         ),
         (
             Some(external_space),
             Some(target_workspace),
-            Some(target_workspace)
+            Some(target_workspace),
+            Some(external_space),
+            Some(target_workspace),
+            true,
+            true,
         )
     );
 }
