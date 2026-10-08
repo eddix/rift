@@ -126,7 +126,7 @@ impl Menu {
     }
 
     pub async fn run(mut self) {
-        // Updates are latest-wins: only the newest one is applied once updates go quiet.
+        // Updates are latest-wins, with a bounded delay even during continuous input.
         const DEBOUNCE: Duration = Duration::from_millis(150);
 
         let mut pending: Option<Update> = None;
@@ -162,8 +162,10 @@ impl Menu {
                             let _enter = span.enter();
                             match event {
                                 Event::Update(update) => {
+                                    if pending.is_none() {
+                                        debounce.set_next_fire(DEBOUNCE);
+                                    }
                                     pending = Some(update);
-                                    debounce.set_next_fire(DEBOUNCE);
                                 }
                                 Event::BindingModeChanged(mode) => {
                                     self.binding_mode = mode;
