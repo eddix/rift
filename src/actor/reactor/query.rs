@@ -851,6 +851,17 @@ impl Reactor {
                 PaletteAction::ReloadConfig,
             ),
             command_entry(
+                "layout.reset-all".to_string(),
+                "Reset All Workspaces".to_string(),
+                [
+                    "layout".to_string(),
+                    "restore".to_string(),
+                    "configured".to_string(),
+                    "repair".to_string(),
+                ],
+                PaletteAction::ResetAllWorkspaces,
+            ),
+            command_entry(
                 "layout.rebalance-all".to_string(),
                 "Rebalance All Workspaces".to_string(),
                 [

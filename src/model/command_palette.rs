@@ -48,6 +48,7 @@ pub enum PaletteAction {
     SetLayout(LayoutMode),
     FocusDisplay(String),
     RebalanceAllWorkspaces,
+    ResetAllWorkspaces,
     ReloadConfig,
 }
 

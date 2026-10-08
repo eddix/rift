@@ -3071,6 +3071,13 @@ impl LayoutEngine {
 
     pub fn workspaces_mut(&mut self) -> &mut WorkspaceStore { &mut self.workspaces }
 
+    pub(crate) fn configured_workspace_selector(
+        &self,
+        context: WindowRuleContext<'_>,
+    ) -> Option<WorkspaceSelector> {
+        self.app_rules.evaluate(context)?.workspace
+    }
+
     pub(crate) fn rebalance_all_workspaces(&mut self, spaces: &[SpaceId]) -> RebalanceAllReport {
         let spaces = spaces.iter().copied().collect::<HashSet<_>>();
         let mut report = RebalanceAllReport {
@@ -3123,6 +3130,57 @@ impl LayoutEngine {
                 if rebalanced {
                     report.workspaces += 1;
                     if active_layout.is_some_and(|layout| system.contains_layout(layout)) {
+                        workspace.layout_state.last_saved = active_layout;
+                    }
+                }
+            }
+        }
+
+        report
+    }
+
+    pub(crate) fn reset_all_workspace_layouts(&mut self, spaces: &[SpaceId]) -> RebalanceAllReport {
+        let spaces = spaces.iter().copied().collect::<HashSet<_>>();
+        let mut report = RebalanceAllReport {
+            displays: spaces.len(),
+            ..Default::default()
+        };
+
+        for space in spaces {
+            let workspace_ids = self
+                .workspaces
+                .existing_workspaces(space)
+                .into_iter()
+                .map(|(workspace, _)| workspace)
+                .collect::<Vec<_>>();
+
+            for workspace_id in workspace_ids {
+                let workspace = &mut self.workspaces[workspace_id];
+                if matches!(workspace.layout_system, LayoutSystemKind::Floating(_)) {
+                    continue;
+                }
+                let active_layout = workspace.layout_state.active();
+                let layouts = workspace.layout_state.all_layouts().collect::<HashSet<_>>();
+                if layouts.is_empty() {
+                    report.skipped += 1;
+                    continue;
+                }
+
+                let mut reset = false;
+                for layout in layouts {
+                    if !workspace.layout_system.contains_layout(layout) {
+                        report.skipped += 1;
+                        continue;
+                    }
+                    workspace.layout_system.rebalance(layout);
+                    report.configurations += 1;
+                    reset = true;
+                }
+                if reset {
+                    report.workspaces += 1;
+                    if active_layout
+                        .is_some_and(|layout| workspace.layout_system.contains_layout(layout))
+                    {
                         workspace.layout_state.last_saved = active_layout;
                     }
                 }
