@@ -948,3 +948,34 @@ fn app_rule_commas_stay_on_the_preceding_line() {
         .unwrap();
     check(&document, 2);
 }
+
+
+#[test]
+fn unmanaged_focus_commands_parse_from_key_bindings() {
+    #[derive(Deserialize)]
+    struct TestConfig {
+        keys: HashMap<String, WmCommand>,
+    }
+
+    let config: TestConfig = toml::from_str(
+        r#"
+        [keys]
+        toggle = "toggle_focus_unmanaged"
+        cycle = "cycle_unmanaged_windows"
+        "#,
+    )
+    .unwrap();
+
+    assert_eq!(
+        (&config.keys["toggle"], &config.keys["cycle"]),
+        (
+            &WmCommand::ReactorCommand(reactor::Command::Reactor(
+                reactor::ReactorCommand::ToggleFocusUnmanaged
+            )),
+            &WmCommand::ReactorCommand(reactor::Command::Reactor(
+                reactor::ReactorCommand::CycleUnmanagedWindows
+            ))
+        )
+    );
+
+}

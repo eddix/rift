@@ -1580,6 +1580,13 @@ impl LayoutEngine {
         space: SpaceId,
         wid: WindowId,
     ) -> bool {
+        if window_store
+            .window(wid)
+            .is_some_and(|window| window.manage_override == Some(false))
+        {
+            return false;
+        }
+
         let active_space_before = window_store.workspace_for_window(wid).map_or_else(
             || self.space_with_window(wid),
             |id| self.projected_space_in(id, wid),
