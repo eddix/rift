@@ -30,7 +30,6 @@ pub struct EventData {
     pub space_id: Option<Sid>,
     pub connection_id: Option<u32>,
     pub count: Option<u32>,
-    pub payload: Option<Vec<u8>>,
     pub len: usize,
 }
 
@@ -261,12 +260,6 @@ extern "C" fn connection_callback(
         _ => {}
     }
 
-    let payload = if bytes.is_empty() {
-        None
-    } else {
-        Some(bytes.to_vec())
-    };
-
     let event_data = EventData {
         event_type: kind,
         window_id,
@@ -274,7 +267,6 @@ extern "C" fn connection_callback(
         space_id,
         connection_id,
         count,
-        payload,
         len,
     };
 

@@ -2242,6 +2242,19 @@ impl LayoutSystem for ScrollingLayoutSystem {
             state.reveal(&self.settings);
         }
     }
+
+    fn rebalance(&mut self, layout: LayoutId) {
+        let Some(state) = self.layouts.get_mut(layout) else {
+            return;
+        };
+        state.mutate(&self.settings, |state| {
+            for column in &mut state.columns {
+                column.width = ColumnWidth::Default;
+                column.height_weights.fill(1.0);
+            }
+        });
+        state.reveal(&self.settings);
+    }
 }
 
 fn set_height_share(column: &mut Column, row: usize, share: f64, scale: f64) {
@@ -2398,6 +2411,21 @@ pub(crate) mod tests {
         assert_eq!(
             f.system.layouts[f.layout].columns.iter().map(|c| c.id).collect::<Vec<_>>(),
             ids
+        );
+    }
+
+    #[test]
+    fn rebalance_restores_configured_column_widths() {
+        let mut fixture = Fixture::new(2);
+        fixture.system.layouts[fixture.layout].columns[0].width = ColumnWidth::Proportion(0.9);
+
+        fixture.system.rebalance(fixture.layout);
+
+        assert!(
+            fixture.system.layouts[fixture.layout]
+                .columns
+                .iter()
+                .all(|column| matches!(column.width, ColumnWidth::Default))
         );
     }
 

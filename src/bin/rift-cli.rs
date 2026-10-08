@@ -147,6 +147,11 @@ enum ExecuteCommands {
         #[command(subcommand)]
         mission_cmd: MissionControlCommands,
     },
+    /// Command palette commands
+    CommandPalette {
+        #[command(subcommand)]
+        palette_cmd: CommandPaletteCommands,
+    },
     /// Display/mouse commands
     Display {
         #[command(subcommand)]
@@ -180,6 +185,8 @@ enum ExecuteCommands {
     Debug,
     /// Serialize and print runtime state
     Serialize,
+    /// Restore configured window placement and reset layouts across all displays
+    ResetAllWorkspaces,
     /// this command is deprecated, use `rift-cli execute space toggle-activated`
     #[deprecated]
     ToggleSpaceActivated,
@@ -473,6 +480,14 @@ impl DisplaySelectionArgs {
 }
 
 #[derive(Subcommand)]
+enum CommandPaletteCommands {
+    /// Toggle the command palette
+    Toggle,
+    /// Toggle the command palette directly in command mode
+    Commands,
+}
+
+#[derive(Subcommand)]
 enum DisplayCommands {
     /// Focus a display by direction, index, or UUID.
     Focus {
@@ -706,6 +721,9 @@ fn build_execute_request(execute: ExecuteCommands) -> Result<RiftRequest, String
         ExecuteCommands::MissionControl { mission_cmd } => {
             map_mission_control_command(mission_cmd)?
         }
+        ExecuteCommands::CommandPalette { palette_cmd } => {
+            map_command_palette_command(palette_cmd)?
+        }
         ExecuteCommands::Display { display_cmd } => map_display_command(display_cmd)?,
         ExecuteCommands::Space { space_cmd } => map_space_command(space_cmd)?,
         ExecuteCommands::SaveAndExit => {
@@ -753,6 +771,9 @@ fn build_execute_request(execute: ExecuteCommands) -> Result<RiftRequest, String
         ExecuteCommands::Serialize => {
             CliCommand::Reactor(reactor::Command::Reactor(reactor::ReactorCommand::Serialize))
         }
+        ExecuteCommands::ResetAllWorkspaces => CliCommand::Reactor(reactor::Command::Reactor(
+            reactor::ReactorCommand::ResetAllWorkspaces,
+        )),
         #[allow(deprecated)]
         ExecuteCommands::ToggleSpaceActivated => {
             eprintln!("this command is deprecated, use rift-cli execute space toggle-activated");
@@ -1135,6 +1156,17 @@ fn map_mission_control_command(cmd: MissionControlCommands) -> Result<CliCommand
     }
 }
 
+fn map_command_palette_command(cmd: CommandPaletteCommands) -> Result<CliCommand, String> {
+    match cmd {
+        CommandPaletteCommands::Toggle => Ok(CliCommand::Reactor(reactor::Command::Reactor(
+            reactor::ReactorCommand::ToggleCommandPalette,
+        ))),
+        CommandPaletteCommands::Commands => Ok(CliCommand::Reactor(reactor::Command::Reactor(
+            reactor::ReactorCommand::ToggleCommandPaletteCommands,
+        ))),
+    }
+}
+
 fn map_space_command(cmd: SpaceCommands) -> Result<CliCommand, String> {
     let command = match cmd {
         SpaceCommands::ToggleActivated => reactor::ReactorCommand::ToggleSpaceActivated,
@@ -1303,6 +1335,52 @@ mod tests {
                     "execute_command": { "command": { "reactor": "cycle_unmanaged_windows" } }
                 })
             )
+        );
+    }
+
+    #[test]
+    fn command_palette_cli_uses_typed_toggle_command() {
+        let request = build_execute_request(ExecuteCommands::CommandPalette {
+            palette_cmd: CommandPaletteCommands::Toggle,
+        })
+        .unwrap();
+
+        assert_eq!(
+            serde_json::to_value(request).unwrap(),
+            serde_json::json!({
+                "execute_command": { "command": { "reactor": "toggle_command_palette" } }
+            })
+        );
+    }
+
+    #[test]
+    fn command_palette_cli_uses_typed_commands_scope() {
+        let request = build_execute_request(ExecuteCommands::CommandPalette {
+            palette_cmd: CommandPaletteCommands::Commands,
+        })
+        .unwrap();
+
+        assert_eq!(
+            serde_json::to_value(request).unwrap(),
+            serde_json::json!({
+                "execute_command": {
+                    "command": { "reactor": "toggle_command_palette_commands" }
+                }
+            })
+        );
+    }
+
+    #[test]
+    fn reset_all_workspaces_cli_uses_typed_reactor_command() {
+        let request = build_execute_request(ExecuteCommands::ResetAllWorkspaces).unwrap();
+
+        assert_eq!(
+            serde_json::to_value(request).unwrap(),
+            serde_json::json!({
+                "execute_command": {
+                    "command": { "reactor": "reset_all_workspaces" }
+                }
+            })
         );
     }
 }

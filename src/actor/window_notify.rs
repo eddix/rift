@@ -5,7 +5,7 @@ use std::time::{Duration, Instant};
 use tracing::{debug, trace, warn};
 
 use super::reactor::{self, Event};
-use super::spaces;
+use super::{border, spaces};
 use crate::actor::app::WindowId;
 use crate::actor::reactor::Requested;
 use crate::common::collections::{HashMap, HashSet};
@@ -81,6 +81,25 @@ pub type Receiver = crate::actor::Receiver<Request>;
 
 const FOCUS_WAKE_DEBOUNCE: Duration = Duration::from_millis(1);
 
+fn is_border_order_event(event: CGSEventType) -> bool {
+    matches!(
+        event,
+        CGSEventType::Known(KnownCGSEvent::WindowReordered)
+            | CGSEventType::Known(KnownCGSEvent::WindowLevelChanged)
+            | CGSEventType::Known(KnownCGSEvent::WindowManagerActivatingClickOrdering)
+            | CGSEventType::Known(KnownCGSEvent::WindowOrderingGroupChanged)
+            | CGSEventType::Known(KnownCGSEvent::WindowParentChanged)
+    )
+}
+
+fn is_border_frame_event(event: CGSEventType) -> bool {
+    matches!(
+        event,
+        CGSEventType::Known(KnownCGSEvent::WindowMoved)
+            | CGSEventType::Known(KnownCGSEvent::WindowResized)
+    )
+}
+
 #[derive(Clone)]
 struct FocusWakeSender {
     wake: mpsc::SyncSender<()>,
@@ -102,6 +121,8 @@ struct Dispatcher {
     spaces_tx: spaces::Sender,
     tx_store: Option<WindowTxStore>,
     focus_wake: FocusWakeSender,
+    border_tx: border::Sender,
+    border_motion: border::BorderMotionHandle,
 }
 
 impl WindowNotify {
@@ -110,6 +131,8 @@ impl WindowNotify {
         spaces_tx: spaces::Sender,
         requests_rx: Receiver,
         initial_events: &[CGSEventType],
+        border_tx: border::Sender,
+        border_motion: border::BorderMotionHandle,
         tx_store: Option<WindowTxStore>,
     ) -> Self {
         let (focus_wake_tx, focus_wake_rx) = mpsc::sync_channel(1);
@@ -119,6 +142,8 @@ impl WindowNotify {
             spaces_tx,
             tx_store,
             focus_wake: FocusWakeSender { wake: focus_wake_tx },
+            border_tx,
+            border_motion,
         }
         .spawn();
         Self {
@@ -205,8 +230,7 @@ impl WindowNotify {
                         }
 
                         let query_started = Instant::now();
-                        let space = window_server::active_space();
-                        let window = window_server::key_focused_window(space);
+                        let focused = window_server::key_focused_window();
                         let query_elapsed = query_started.elapsed();
 
                         // A wake queued during the SPI means this result may already
@@ -219,11 +243,10 @@ impl WindowNotify {
                         trace!(
                             wake_count,
                             ?query_elapsed,
-                            ?space,
-                            ?window,
+                            ?focused,
                             "resolved coalesced WindowServer focus"
                         );
-                        if let Some(window) = window {
+                        if let Some((window, space)) = focused {
                             events_tx.send(Event::WindowServerFocusChanged(window, space));
                         }
                         break;
@@ -256,9 +279,27 @@ impl Dispatcher {
             spaces_tx,
             tx_store,
             focus_wake,
+            border_tx,
+            border_motion,
         } = self;
         let event = evt.event_type;
         trace!(?event, ?evt, "got event");
+        if is_border_order_event(event)
+            && let Some(window_id) = evt.window_id
+        {
+            border_tx.send(border::Event::OrderInvalidated(WindowServerId::new(window_id)));
+        }
+        if is_border_frame_event(event)
+            && let Some(window_id) = evt.window_id
+        {
+            let wsid = WindowServerId::new(window_id);
+            if let Some(bounds) = window_server::get_window_bounds(wsid) {
+                if let Err(error) = border_motion.move_target(wsid, bounds) {
+                    trace!(?error, ?wsid, "focused-window border fast move failed");
+                }
+                border_tx.send(border::Event::FrameChanged(wsid, bounds));
+            }
+        }
 
         match event {
             CGSEventType::Known(KnownCGSEvent::WindowClosed) => {
@@ -361,7 +402,8 @@ impl Dispatcher {
 
 #[cfg(test)]
 mod tests {
-    use super::FocusWakeSender;
+    use super::{FocusWakeSender, is_border_frame_event, is_border_order_event};
+    use crate::sys::skylight::{CGSEventType, KnownCGSEvent};
 
     #[test]
     fn focus_wakes_coalesce_to_one_signal() {
@@ -373,5 +415,31 @@ mod tests {
         sender.notify();
 
         assert_eq!(rx.try_iter().count(), 1);
+    }
+
+    #[test]
+    fn activating_click_and_order_group_events_resync_the_border() {
+        for event in [
+            KnownCGSEvent::WindowReordered,
+            KnownCGSEvent::WindowLevelChanged,
+            KnownCGSEvent::WindowManagerActivatingClickOrdering,
+            KnownCGSEvent::WindowOrderingGroupChanged,
+            KnownCGSEvent::WindowParentChanged,
+        ] {
+            assert!(is_border_order_event(CGSEventType::Known(event)));
+        }
+        assert!(!is_border_order_event(CGSEventType::Known(
+            KnownCGSEvent::WindowMoved,
+        )));
+    }
+
+    #[test]
+    fn move_and_resize_events_use_the_border_fast_path() {
+        for event in [KnownCGSEvent::WindowMoved, KnownCGSEvent::WindowResized] {
+            assert!(is_border_frame_event(CGSEventType::Known(event)));
+        }
+        assert!(!is_border_frame_event(CGSEventType::Known(
+            KnownCGSEvent::WindowReordered,
+        )));
     }
 }

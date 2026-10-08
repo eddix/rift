@@ -40,7 +40,7 @@ type Receiver = actor::Receiver<WmEvent>;
 use self::WmCmd::*;
 use crate::actor::app::{AppInfo, AppThreadHandle, Request};
 use crate::actor::spaces::ForwardedSpaceState;
-use crate::actor::{self, config, input, mission_control, reactor};
+use crate::actor::{self, command_palette, config, input, mission_control, reactor};
 use crate::model::tx_store::WindowTxStore;
 use crate::sys::dispatch::DispatchExt;
 use crate::sys::screen::CoordinateConverter;
@@ -146,6 +146,8 @@ pub enum WmCmd {
     ShowMissionControlCurrent,
     #[command(group = 5, label = "Dismiss overview", order = 43)]
     DismissMissionControl,
+    ToggleCommandPalette,
+    ToggleCommandPaletteCommands,
     #[command(group = 0, order = 11)]
     CloseWindow,
 }
@@ -195,6 +197,7 @@ pub struct WmController {
     input_tx: input::Sender,
     stack_line_tx: Option<crate::actor::stack_line::Sender>,
     mission_control_tx: Option<mission_control::Sender>,
+    command_palette_tx: Option<command_palette::Sender>,
     window_tx_store: Option<WindowTxStore>,
     receiver: Receiver,
     sender: Sender,
@@ -267,6 +270,7 @@ impl WmController {
         input_tx: input::Sender,
         stack_line_tx: crate::actor::stack_line::Sender,
         mission_control_tx: Option<crate::actor::mission_control::Sender>,
+        command_palette_tx: crate::actor::command_palette::Sender,
         window_tx_store: Option<WindowTxStore>,
     ) -> (Self, actor::Sender<WmEvent>) {
         let (sender, receiver) = actor::channel();
@@ -281,6 +285,7 @@ impl WmController {
             input_tx,
             stack_line_tx: Some(stack_line_tx),
             mission_control_tx,
+            command_palette_tx: Some(command_palette_tx),
             window_tx_store,
             receiver,
             sender: sender.clone(),
@@ -425,6 +430,11 @@ impl WmController {
                 self.config.config = new_cfg;
 
                 _ = self.input_tx.send(input::Request::ConfigUpdated(self.config.config.clone()));
+                if let Some(tx) = &self.command_palette_tx {
+                    tx.send(command_palette::Event::ConfigUpdated(Box::new(
+                        self.config.config.clone(),
+                    )));
+                }
             }
             PowerStateChanged(is_low_power_mode) => {
                 info!("Power state changed: low power mode = {}", is_low_power_mode);
@@ -503,6 +513,16 @@ impl WmController {
             Command(Wm(DismissMissionControl)) => {
                 if let Some(tx) = &self.mission_control_tx {
                     let _ = tx.try_send(mission_control::Event::Dismiss);
+                }
+            }
+            Command(Wm(ToggleCommandPalette)) => {
+                if let Some(tx) = &self.command_palette_tx {
+                    tx.send(command_palette::Event::Toggle);
+                }
+            }
+            Command(Wm(ToggleCommandPaletteCommands)) => {
+                if let Some(tx) = &self.command_palette_tx {
+                    tx.send(command_palette::Event::ToggleCommands);
                 }
             }
             Command(Wm(CloseWindow)) => {

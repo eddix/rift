@@ -73,13 +73,11 @@ pub fn handle_mouse_up(
     drag.release_preview();
     let window = commit.source.window;
     drag.externally_controlled_window = None;
-    let dragged_is_admitted =
-        state.windows.window(window).is_some_and(WindowState::is_admitted);
+    let dragged_is_admitted = state.windows.window(window).is_some_and(WindowState::is_admitted);
     let mut needs_layout = commit.source.tiled && dragged_is_admitted;
 
     if !dragged_is_admitted {
-        if let Some(server_id) =
-            state.windows.window(window).and_then(|window| window.info.sys_id)
+        if let Some(server_id) = state.windows.window(window).and_then(|window| window.info.sys_id)
         {
             state.windows.set_window_server_space(server_id, payload.final_space);
             if payload.final_space.is_some() {

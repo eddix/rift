@@ -1841,6 +1841,7 @@ mod tests {
             frame: Default::default(),
             min_frame: Default::default(),
             max_frame: Default::default(),
+            corner_radius: None,
         });
         store.suspend_window_server_to_native_fullscreen(
             7,
@@ -1866,6 +1867,7 @@ mod tests {
             frame: Default::default(),
             min_frame: Default::default(),
             max_frame: Default::default(),
+            corner_radius: None,
         });
         store.mark_window_server_observed(wsid);
         assert!(!store.has_pending_window_for_pid(2));
