@@ -115,6 +115,35 @@ fn app_rules_parse_placement_size_and_focus() {
 }
 
 #[test]
+fn app_rules_parse_and_validate_ax_identifier_regex() {
+    let settings: VirtualWorkspaceSettings = toml::from_str(
+        r#"
+            app_rules = [{
+                app_id = "company.thebrowser.Browser",
+                ax_identifier_regex = "^littleBrowserWindow-",
+                manage = false
+            }]
+        "#,
+    )
+    .unwrap();
+
+    assert_eq!(
+        settings.app_rules[0].ax_identifier_regex.as_deref(),
+        Some("^littleBrowserWindow-")
+    );
+    assert!(settings.validate().is_empty());
+
+    let invalid: VirtualWorkspaceSettings =
+        toml::from_str(r#"app_rules = [{ ax_identifier_regex = "[" }]"#).unwrap();
+    assert!(
+        invalid
+            .validate()
+            .iter()
+            .any(|issue| issue.contains("invalid ax_identifier_regex"))
+    );
+}
+
+#[test]
 fn app_rule_geometry_validation_rejects_invalid_values() {
     let mut settings = VirtualWorkspaceSettings::default();
     settings.app_rules.push(AppWorkspaceRule {
@@ -133,6 +162,7 @@ fn app_rule_geometry_validation_rejects_invalid_values() {
         title_substring: None,
         ax_role: None,
         ax_subrole: None,
+        ax_identifier_regex: None,
     });
 
     let issues = settings.validate();

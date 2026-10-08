@@ -184,6 +184,11 @@ pub struct AppWorkspaceRule {
     /// reported by the AX APIs for a window (exact string match).
     #[setting(custom)]
     pub ax_subrole: Option<String>,
+
+    /// Optional: Regular expression to match the accessibility identifier
+    /// reported by AXIdentifier.
+    #[setting(custom)]
+    pub ax_identifier_regex: Option<String>,
 }
 
 #[derive(Serialize, Deserialize, Debug, PartialEq, Clone, Copy)]
@@ -314,6 +319,7 @@ impl VirtualWorkspaceSettings {
                 field(&rule.title_substring).map(str::to_lowercase),
                 field(&rule.ax_role).map(str::to_owned),
                 field(&rule.ax_subrole).map(str::to_owned),
+                field(&rule.ax_identifier_regex).map(str::to_owned),
             );
             let first = *seen_matchers.entry(matcher).or_insert(index);
             if first != index {
@@ -329,11 +335,9 @@ impl VirtualWorkspaceSettings {
                 && rule.title_substring.is_none()
                 && rule.ax_role.is_none()
                 && rule.ax_subrole.is_none()
+                && rule.ax_identifier_regex.is_none()
             {
-                issues.push(format!(
-                    "App rule {} has no app_id, app_name, title_regex, or title_substring specified",
-                    index
-                ));
+                issues.push(format!("App rule {} has no matcher specified", index));
             }
 
             if let Some(ref workspace) = rule.workspace {
@@ -426,6 +430,17 @@ impl VirtualWorkspaceSettings {
             }
             if rule.ax_subrole.as_deref() == Some("") {
                 issues.push(format!("App rule {} has empty ax_subrole", index));
+            }
+
+            if let Some(ref identifier_re) = rule.ax_identifier_regex {
+                if identifier_re.is_empty() {
+                    issues.push(format!("App rule {} has empty ax_identifier_regex", index));
+                } else if let Err(error) = RegexBuilder::new(identifier_re).build() {
+                    issues.push(format!(
+                        "App rule {} has invalid ax_identifier_regex '{}': {}",
+                        index, identifier_re, error
+                    ));
+                }
             }
         }
 
