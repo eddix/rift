@@ -1605,6 +1605,7 @@ impl WorkspaceStore {
                 window_title,
                 ax_role,
                 ax_subrole,
+                ax_identifier: None,
             },
         );
         self.apply_app_rule_decision(window_store, window_id, space, decision, false)
@@ -2271,6 +2272,7 @@ mod tests {
             title_substring: None,
             ax_role: None,
             ax_subrole: None,
+            ax_identifier_regex: None,
         }];
         let mut manager = WorkspaceStore::new_with_config(&settings, &LayoutSettings::default());
         let old_space = SpaceId::new(1);

@@ -171,10 +171,11 @@ pub(crate) fn assign_window<'a>(
     let context = context.into();
     let space = context.space;
     let result = if let Some(window) = state.windows.window(wid) {
-        let (title, role, subrole) = (
+        let (title, role, subrole, identifier) = (
             window.info.title.clone(),
             window.info.ax_role.clone(),
             window.info.ax_subrole.clone(),
+            window.info.ax_identifier.clone(),
         );
         layout.layout_engine.assign_window_with_app_info(
             &mut state.windows,
@@ -186,6 +187,7 @@ pub(crate) fn assign_window<'a>(
                 window_title: Some(&title),
                 ax_role: role.as_deref(),
                 ax_subrole: subrole.as_deref(),
+                ax_identifier: identifier.as_deref(),
             },
             reapply,
         )
