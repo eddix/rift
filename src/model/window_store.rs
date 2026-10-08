@@ -1606,6 +1606,7 @@ mod tests {
                 path: None,
                 ax_role: None,
                 ax_subrole: None,
+                ax_identifier: None,
             }),
         );
         let _ = window_store.suspend_window_to_native_fullscreen(

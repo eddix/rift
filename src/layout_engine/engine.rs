@@ -1691,6 +1691,7 @@ impl LayoutEngine {
                             window_title: info.title.as_deref(),
                             ax_role: info.ax_role.as_deref(),
                             ax_subrole: info.ax_subrole.as_deref(),
+                            ax_identifier: None,
                         },
                         false,
                     ) else {
@@ -3972,6 +3973,7 @@ mod tests {
             title_substring: None,
             ax_role: None,
             ax_subrole: None,
+            ax_identifier_regex: None,
         }];
         let mut engine = LayoutEngine::new(&settings, &LayoutSettings::default(), None);
         let mut window_store = WindowStore::default();
@@ -4101,6 +4103,7 @@ mod tests {
             title_substring: None,
             ax_role: None,
             ax_subrole: None,
+            ax_identifier_regex: None,
         }];
         let mut layout_settings = LayoutSettings::default();
         layout_settings.scrolling.min_column_width_ratio = 0.1;
