@@ -1,6 +1,6 @@
 #[cfg(test)]
 use std::cell::RefCell;
-use std::ffi::{CStr, c_int};
+use std::ffi::{CStr, c_int, c_void};
 use std::num::NonZeroU32;
 use std::ptr::NonNull;
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -135,6 +135,19 @@ pub struct WindowIterator {
     iter: *mut CFType,
 }
 
+type WindowIteratorGetCornerRadii = unsafe extern "C" fn(*mut CFType) -> *mut CFArray<CFNumber>;
+
+static WINDOW_ITERATOR_GET_CORNER_RADII: Lazy<Option<WindowIteratorGetCornerRadii>> =
+    Lazy::new(|| {
+        let symbol = unsafe { dlsym(RTLD_DEFAULT, c"SLSWindowIteratorGetCornerRadii".as_ptr()) };
+        if symbol.is_null() {
+            return None;
+        }
+        // SAFETY: SkyLight exports this symbol with the signature used by
+        // JankyBorders on macOS 26 and newer. A missing symbol is handled above.
+        Some(unsafe { std::mem::transmute::<*mut c_void, WindowIteratorGetCornerRadii>(symbol) })
+    });
+
 impl WindowIterator {
     pub fn new(ids: &[WindowServerId]) -> Option<Self> {
         if ids.is_empty() {
@@ -199,6 +212,14 @@ impl WindowIterator {
     #[inline]
     pub fn alpha(&self) -> f32 { unsafe { SLSWindowIteratorGetAlpha(self.iter) } }
 
+    pub fn corner_radius(&self) -> Option<f64> {
+        let get_corner_radii = (*WINDOW_ITERATOR_GET_CORNER_RADII)?;
+        let radii = NonNull::new(unsafe { get_corner_radii(self.iter) })?;
+        let radii = unsafe { CFRetained::from_raw(radii) };
+        let radius = radii.iter().next()?.as_f64()?;
+        validate_corner_radius(radius)
+    }
+
     #[inline]
     #[allow(dead_code)]
     pub fn tags(&self) -> u64 { unsafe { SLSWindowIteratorGetTags(self.iter) } }
@@ -239,6 +260,10 @@ pub fn window_title(id: WindowServerId) -> Option<(i32, String)> {
     }
     let title = NonNull::new(unsafe { SLSWindowIteratorCopyTitle(query.iter) })?;
     Some((query.pid(), unsafe { CFRetained::from_raw(title) }.to_string()))
+}
+
+fn validate_corner_radius(radius: f64) -> Option<f64> {
+    (radius.is_finite() && radius > 0.0 && radius <= 64.0).then_some(radius)
 }
 
 impl Drop for WindowIterator {
@@ -372,6 +397,8 @@ pub struct WindowServerInfo {
     pub min_frame: CGSize,
     #[serde(with = "CGSizeDef")]
     pub max_frame: CGSize,
+    #[serde(default)]
+    pub corner_radius: Option<f64>,
 }
 
 /// Global CG on-screen window snapshot.
@@ -526,6 +553,7 @@ pub fn get_windows(ids: &[WindowServerId]) -> Vec<WindowServerInfo> {
             frame: CGRect::new(CGPoint::new(0.0, 0.0), CGSize::new(800.0, 600.0)),
             min_frame: CGSize::ZERO,
             max_frame: CGSize::ZERO,
+            corner_radius: None,
         })
         .collect()
 }
@@ -559,6 +587,17 @@ pub fn get_window(id: WindowServerId) -> Option<WindowServerInfo> {
         }
         return window_info_from_query(&query);
     }
+}
+
+#[cfg(test)]
+pub fn get_window_bounds(id: WindowServerId) -> Option<CGRect> {
+    get_window(id).map(|window| window.frame)
+}
+
+#[cfg(not(test))]
+pub fn get_window_bounds(id: WindowServerId) -> Option<CGRect> {
+    let mut frame = CGRect::default();
+    (unsafe { CGSGetWindowBounds(*G_CONNECTION, id.as_u32(), &mut frame) } == 0).then_some(frame)
 }
 
 fn get_num(dict: &CFDictionary<CFString, CFType>, key: &'static CFString) -> Option<i64> {
@@ -618,6 +657,7 @@ fn window_info_from_query(query: &WindowIterator) -> Option<WindowServerInfo> {
         frame: query.bounds(),
         min_frame,
         max_frame,
+        corner_radius: query.corner_radius(),
     })
 }
 
@@ -654,11 +694,19 @@ fn find_window_at_point(point: &mut CGPoint, below_window_id: Option<u32>) -> Op
     (wid != 0).then_some((wid, wcid))
 }
 
-fn is_own_window(cid: i32) -> bool { *G_CONNECTION == cid }
+fn is_own_process(pid: i32) -> bool { pid == std::process::id() as i32 }
+
+fn is_own_connection(cid: i32) -> bool {
+    if *G_CONNECTION == cid {
+        return true;
+    }
+    let mut pid = 0;
+    cg_ok(unsafe { SLSConnectionGetPID(cid, &mut pid) }).is_ok() && is_own_process(pid)
+}
 
 pub fn get_window_at_point(mut point: CGPoint) -> Option<WindowServerId> {
     let (mut wid, mut cid) = find_window_at_point(&mut point, None)?;
-    while is_own_window(cid) {
+    while is_own_connection(cid) {
         (wid, cid) = find_window_at_point(&mut point, Some(wid))?;
     }
     Some(WindowServerId(wid))
@@ -678,7 +726,7 @@ pub fn is_point_occluded_by_external_window(mut point: CGPoint) -> bool {
 
     // Skip past any Rift-owned windows stacked at this point.
     while let Some((wid, cid)) = hit {
-        if !is_own_window(cid) {
+        if !is_own_connection(cid) {
             let level = window_level(wid).unwrap_or(NSWindowLevel::MIN);
             return level >= NSNormalWindowLevel;
         }
@@ -715,6 +763,16 @@ fn iterator_window_tags(iterator: *mut CFType) -> SLSWindowTags {
     SLSWindowTags::from_bits_retain(unsafe { SLSWindowIteratorGetTags(iterator) })
 }
 
+/// Returns the WindowServer tags currently applied to one window.
+///
+/// Querying the iterator is intentional: on current macOS releases the older
+/// direct `SLSGetWindowTags` entry point can report success with stale data.
+pub fn window_tags(wid: u32) -> Option<SLSWindowTags> {
+    let query = WindowIterator::new(&[WindowServerId::new(wid)])?;
+    query.advance()?;
+    Some(iterator_window_tags(query.iter))
+}
+
 /// Returns whether the tags describe a document or floating app window.
 fn tags_match_app_window_role(tags: SLSWindowTags) -> bool {
     tags.contains(SLSWindowTags::DOCUMENT) || tags.contains(SLSWindowTags::FLOATING)
@@ -724,10 +782,11 @@ fn tags_match_app_window_role(tags: SLSWindowTags) -> bool {
 fn iterator_window_suitable(iterator: *mut CFType) -> bool {
     let tags = iterator_window_tags(iterator);
     let parent_wid = unsafe { SLSWindowIteratorGetParentID(iterator) };
+    let pid = unsafe { SLSWindowIteratorGetPID(iterator) };
 
     // Previous Rust filter also required attribute/high-bit hints plus
     // ATTACHED, IGNORES_CYCLE, and DOCUMENT or (FLOATING && MODAL).
-    parent_wid == 0 && tags_match_app_window_role(tags)
+    parent_wid == 0 && !is_own_process(pid) && tags_match_app_window_role(tags)
 }
 
 // credit to yabai
@@ -804,10 +863,12 @@ pub fn try_space_window_list_for_connection(
     while iterator.advance().is_some() {
         let tags = iterator_window_tags(iterator.iter);
         let parent_id = iterator.parent_id();
+        let pid = iterator.pid();
         let wid = iterator.window_id();
         // Previous Rust path also checked level, attributes, and
         // fullscreen/minimized tag hints before accepting the window.
-        let is_candidate = parent_id == 0 && tags_match_app_window_role(tags);
+        let is_candidate =
+            parent_id == 0 && !is_own_process(pid) && tags_match_app_window_role(tags);
 
         if is_candidate {
             windows.push(wid);
@@ -817,15 +878,14 @@ pub fn try_space_window_list_for_connection(
     Some(windows)
 }
 
-/// Resolve the actual key window on `space` from WindowServer state.
+/// Resolve the actual key window across all visible spaces from WindowServer state.
 ///
 /// The key-focus process can differ briefly from the globally frontmost process,
-/// especially during rapid focus changes. Scoping the native, z-ordered window
-/// list to that process avoids the delayed or missing `AXMainWindow` read used by
-/// the application actors. The returned id is intentionally independent of the
-/// reactor's tracked-window state so callers can use it to trigger discovery of
-/// a newly materialized native tab.
-pub fn key_focused_window(space: SpaceId) -> Option<WindowId> {
+/// especially during rapid focus changes. Querying every visible native space is
+/// required on multi-display setups because `CGSGetActiveSpace` reports only one
+/// display's context. The returned id is intentionally independent of the reactor's
+/// tracked-window state so callers can trigger discovery of a newly materialized tab.
+pub fn key_focused_window() -> Option<(WindowId, SpaceId)> {
     let mut psn = ProcessSerialNumber::default();
     let mut fallback = 0u8;
     if cg_ok(unsafe { SLPSGetKeyFocusProcess(&mut psn, &mut fallback) }).is_err() {
@@ -839,8 +899,8 @@ pub fn key_focused_window(space: SpaceId) -> Option<WindowId> {
 
     let filter = WindowQueryFilter {
         owner,
-        spaces: &[space.get()],
-        space_list_options: 0,
+        spaces: &[],
+        space_list_options: CGSSpaceMask::ALL_VISIBLE_SPACES.bits(),
         window_list_options: 0x2,
         query_flags: 0x2,
         include_tags: SLSWindowTags::DOCUMENT.bits(),
@@ -852,11 +912,28 @@ pub fn key_focused_window(space: SpaceId) -> Option<WindowId> {
     let query = window_query_run(&filter)?;
     query.advance()?;
     let wsid = WindowServerId::new(query.window_id());
+    let space = window_space(wsid).unwrap_or_else(active_space);
 
-    Some(WindowId {
-        pid: query.pid(),
-        idx: wsid.as_nonzero()?,
-    })
+    Some((
+        WindowId {
+            pid: query.pid(),
+            idx: wsid.as_nonzero()?,
+        },
+        space,
+    ))
+}
+
+/// Returns the PID WindowServer currently considers globally frontmost.
+pub fn frontmost_process_pid() -> Option<pid_t> {
+    let mut psn = ProcessSerialNumber::default();
+    cg_ok(unsafe { _SLPSGetFrontProcess(&mut psn) }).ok()?;
+    let mut connection = 0;
+    if unsafe { SLSGetConnectionIDForPSN(*G_CONNECTION, &psn, &mut connection) } != 0 {
+        return None;
+    }
+    let mut pid = 0;
+    cg_ok(unsafe { SLSConnectionGetPID(connection, &mut pid) }).ok()?;
+    (pid > 0).then_some(pid)
 }
 
 /// The space on the display currently holding WindowServer focus.
@@ -969,12 +1046,25 @@ pub unsafe fn switch_space(direction: crate::layout_engine::Direction) {
 
 #[cfg(test)]
 mod tests {
-    use super::WindowServerId;
+    use super::{WindowServerId, validate_corner_radius};
 
     #[test]
     fn zero_window_server_id_is_not_a_window_id() {
         assert!(WindowServerId::new(0).as_nonzero().is_none());
         assert_eq!(WindowServerId::new(42).as_nonzero().map(|id| id.get()), Some(42));
+    }
+
+    #[test]
+    fn corner_radius_validation_accepts_only_sane_positive_values() {
+        assert_eq!(
+            [
+                validate_corner_radius(13.0),
+                validate_corner_radius(0.0),
+                validate_corner_radius(f64::NAN),
+                validate_corner_radius(65.0),
+            ],
+            [Some(13.0), None, None, None]
+        );
     }
 }
 

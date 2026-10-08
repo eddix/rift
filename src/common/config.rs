@@ -578,9 +578,13 @@ pub struct UiSettings {
     #[serde(default)]
     pub menu_bar: MenuBarSettings,
     #[serde(default)]
+    pub border: BorderSettings,
+    #[serde(default)]
     pub stack_line: StackLineSettings,
     #[serde(default)]
     pub mission_control: MissionControlSettings,
+    #[serde(default)]
+    pub command_palette: CommandPaletteSettings,
 }
 
 #[derive(Serialize, Deserialize, Debug, PartialEq, Clone)]
@@ -810,6 +814,57 @@ impl Default for MenuBarSettings {
     }
 }
 
+/// Focused-window border rendered by Rift.
+#[derive(Serialize, Deserialize, Debug, PartialEq, Clone, Copy)]
+#[serde(deny_unknown_fields)]
+pub struct BorderSettings {
+    #[serde(default = "no")]
+    pub enabled: bool,
+    #[serde(default = "default_border_width")]
+    pub width: f64,
+    /// Color encoded as ARGB, for example `0xfff37021`.
+    #[serde(default = "default_border_color")]
+    pub color: u32,
+    #[serde(default = "default_border_corner_radius")]
+    pub corner_radius: f64,
+    #[serde(default = "yes")]
+    pub adaptive_corner_radius: bool,
+    #[serde(default = "yes")]
+    pub hidpi: bool,
+}
+
+impl Default for BorderSettings {
+    fn default() -> Self {
+        Self {
+            enabled: false,
+            width: default_border_width(),
+            color: default_border_color(),
+            corner_radius: default_border_corner_radius(),
+            adaptive_corner_radius: true,
+            hidpi: true,
+        }
+    }
+}
+
+impl BorderSettings {
+    pub fn validate(&self) -> Vec<String> {
+        let mut issues = Vec::new();
+        if !self.width.is_finite() || self.width <= 0.0 {
+            issues.push(format!(
+                "ui.border.width must be finite and positive, got {}",
+                self.width
+            ));
+        }
+        if !self.corner_radius.is_finite() || self.corner_radius < 0.0 {
+            issues.push(format!(
+                "ui.border.corner_radius must be finite and non-negative, got {}",
+                self.corner_radius
+            ));
+        }
+        issues
+    }
+}
+
 #[derive(Serialize, Deserialize, Debug, PartialEq, Clone, Default)]
 #[serde(deny_unknown_fields)]
 pub struct StackLineSettings {
@@ -892,11 +947,56 @@ pub struct MissionControlSettings {
     pub fade_duration_ms: f64,
 }
 
+#[derive(Serialize, Deserialize, Debug, PartialEq, Clone, Copy)]
+#[serde(deny_unknown_fields)]
+pub struct CommandPaletteSettings {
+    #[serde(default = "no")]
+    pub enabled: bool,
+    /// Number of result rows visible before the complete result set scrolls.
+    #[serde(default = "default_command_palette_max_results")]
+    pub max_results: usize,
+    #[serde(default = "default_command_palette_width")]
+    pub width: f64,
+}
+
+impl Default for CommandPaletteSettings {
+    fn default() -> Self {
+        Self {
+            enabled: false,
+            max_results: default_command_palette_max_results(),
+            width: default_command_palette_width(),
+        }
+    }
+}
+
+impl CommandPaletteSettings {
+    pub fn validate(&self) -> Vec<String> {
+        let mut issues = Vec::new();
+        if !(1..=20).contains(&self.max_results) {
+            issues.push(format!(
+                "ui.command_palette.max_results must be between 1 and 20, got {}",
+                self.max_results
+            ));
+        }
+        if !self.width.is_finite() || self.width < 360.0 {
+            issues.push(format!(
+                "ui.command_palette.width must be finite and at least 360, got {}",
+                self.width
+            ));
+        }
+        issues
+    }
+}
+
 fn default_mission_control_fade_duration_ms() -> f64 { 180.0 }
 
 fn default_drop_zone_fraction() -> f64 { 0.25 }
 
 fn default_mouse_action_none() -> MouseAction { MouseAction::None }
+
+fn default_command_palette_max_results() -> usize { 8 }
+
+fn default_command_palette_width() -> f64 { 640.0 }
 
 fn default_master_stack_ratio() -> f64 { 0.6 }
 
@@ -1322,6 +1422,8 @@ impl Settings {
         }
 
         issues.extend(self.layout.validate());
+        issues.extend(self.ui.border.validate());
+        issues.extend(self.ui.command_palette.validate());
 
         if !(0.10..=0.45).contains(&self.drag_drop.drop_zone_fraction) {
             issues.push(format!(
@@ -1631,6 +1733,9 @@ fn default_overscroll_threshold() -> f64 { 0.55 }
 
 fn default_stack_line_spacing() -> f64 { 1.0 }
 fn default_stack_line_thickness() -> f64 { 20.0 }
+fn default_border_width() -> f64 { 4.0 }
+fn default_border_color() -> u32 { 0xfff3_7021 }
+fn default_border_corner_radius() -> f64 { 10.0 }
 
 #[derive(Serialize, Deserialize, Debug, PartialEq, Clone, Copy, Default)]
 #[serde(rename_all = "snake_case")]
@@ -2005,6 +2110,7 @@ impl Config {
 mod tests {
     use super::*;
     use crate::actor::reactor;
+    use crate::actor::wm_controller::WmCmd;
     use crate::layout_engine::{LayoutCommand, ResizeOrientation};
 
     #[test]
@@ -2270,6 +2376,31 @@ mod tests {
     }
 
     #[test]
+    fn command_palette_toggle_parses_from_key_bindings() {
+        #[derive(Deserialize)]
+        struct TestConfig {
+            keys: HashMap<String, WmCommand>,
+        }
+
+        let config: TestConfig = toml::from_str(
+            r#"
+            [keys]
+            palette = "toggle_command_palette"
+            commands = "toggle_command_palette_commands"
+            "#,
+        )
+        .unwrap();
+
+        assert_eq!(
+            (&config.keys["palette"], &config.keys["commands"]),
+            (
+                &WmCommand::Wm(WmCmd::ToggleCommandPalette),
+                &WmCommand::Wm(WmCmd::ToggleCommandPaletteCommands),
+            )
+        );
+    }
+
+    #[test]
     fn menu_bar_layout_folder_defaults_and_expands_home() {
         let settings: MenuBarSettings = toml::from_str("").unwrap();
 
@@ -2289,6 +2420,64 @@ mod tests {
             settings.resolved_layout_folder(),
             PathBuf::from("/tmp/rift-layouts")
         );
+    }
+
+    #[test]
+    fn border_settings_default_to_the_local_janky_borders_style() {
+        let settings: BorderSettings = toml::from_str("").unwrap();
+
+        assert_eq!(settings, BorderSettings {
+            enabled: false,
+            width: 4.0,
+            color: 0xfff3_7021,
+            corner_radius: 10.0,
+            adaptive_corner_radius: true,
+            hidpi: true,
+        });
+    }
+
+    #[test]
+    fn border_settings_validation_rejects_invalid_geometry() {
+        let settings = BorderSettings {
+            width: 0.0,
+            corner_radius: f64::NAN,
+            ..BorderSettings::default()
+        };
+
+        assert_eq!(settings.validate().len(), 2);
+    }
+
+    #[test]
+    fn border_settings_can_disable_adaptive_corner_radius() {
+        let settings: BorderSettings =
+            toml::from_str("adaptive_corner_radius = false\ncorner_radius = 14.0").unwrap();
+
+        assert_eq!(
+            (settings.adaptive_corner_radius, settings.corner_radius),
+            (false, 14.0)
+        );
+    }
+
+    #[test]
+    fn command_palette_settings_default_to_eight_visible_rows() {
+        let settings: CommandPaletteSettings = toml::from_str("").unwrap();
+
+        assert_eq!(settings, CommandPaletteSettings {
+            enabled: false,
+            max_results: 8,
+            width: 640.0,
+        });
+    }
+
+    #[test]
+    fn command_palette_settings_reject_invalid_size_limits() {
+        let settings = CommandPaletteSettings {
+            max_results: 0,
+            width: 200.0,
+            ..CommandPaletteSettings::default()
+        };
+
+        assert_eq!(settings.validate().len(), 2);
     }
 
     #[test]

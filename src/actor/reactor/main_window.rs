@@ -77,6 +77,7 @@ impl MainWindowTracker {
                 (pid, quiet)
             }
             &Event::WindowServerFocusChanged(wid, _) => {
+                self.global_frontmost = Some(wid.pid);
                 self.window_server_focus_authoritative = true;
                 self.window_server_focus = Some(wid);
                 return None;
@@ -120,6 +121,8 @@ impl MainWindowTracker {
     pub fn app_main_window(&self, pid: pid_t) -> Option<WindowId> {
         self.apps.get(&pid)?.main_window
     }
+
+    pub fn frontmost_pid(&self) -> Option<pid_t> { self.global_frontmost }
 }
 
 #[cfg(test)]
@@ -171,6 +174,18 @@ mod tests {
 
         let _ = tracker.handle_event(&Event::WindowDestroyed(server_window));
         assert_eq!(tracker.main_window(), Some(ax_window));
+    }
+
+    #[test]
+    fn window_server_focus_should_update_the_global_frontmost_process() {
+        let previous = WindowId::new(7, 1);
+        let focused = WindowId::new(8, 2);
+        let mut tracker = MainWindowTracker::default();
+        tracker.global_frontmost = Some(previous.pid);
+
+        let _ = tracker.handle_event(&Event::WindowServerFocusChanged(focused, SpaceId::new(2)));
+
+        assert_eq!(tracker.main_window(), Some(focused));
     }
 
     #[test]

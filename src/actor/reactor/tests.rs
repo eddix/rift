@@ -193,6 +193,158 @@ fn layout_query_exposes_active_and_inactive_workspace_container_trees() {
 }
 
 #[test]
+fn command_palette_query_includes_unmanaged_windows() {
+    let mut reactor = test_reactor();
+    let space = SpaceId::new(1);
+    let frame = CGRect::new(CGPoint::ZERO, CGSize::new(1000.0, 800.0));
+    reactor.handle_event(space_state_event(vec![frame], vec![Some(space)]));
+    let window = WindowId::new(7, 1);
+    reactor.add_test_app_with_info(window.pid, "com.example.unmanaged", "Unmanaged App");
+    reactor.add_test_window_with_manageability(
+        window,
+        WindowServerId::new(701),
+        Some(space),
+        frame,
+        false,
+    );
+
+    let snapshot = reactor.query_command_palette();
+
+    assert!(snapshot.entries.iter().any(|entry| {
+        entry.id == crate::model::command_palette::PaletteEntryId::Window(window)
+            && entry.secondary.contains("Unmanaged")
+    }));
+}
+
+#[test]
+fn command_palette_query_excludes_nonstandard_auxiliary_windows() {
+    let mut reactor = test_reactor();
+    let space = SpaceId::new(1);
+    let frame = CGRect::new(CGPoint::ZERO, CGSize::new(750.0, 500.0));
+    reactor.handle_event(space_state_event(vec![frame], vec![Some(space)]));
+    let status = WindowId::new(42, 1);
+    let main = WindowId::new(42, 2);
+    reactor.add_test_app_with_info(42, "now.typeless.desktop", "Typeless");
+    reactor.add_test_window(status, WindowServerId::new(4201), Some(space), frame);
+    reactor.add_test_window(main, WindowServerId::new(4202), Some(space), frame);
+    let status_state = reactor.state.windows.window_mut(status).expect("status window");
+    status_state.info.title = "Status".to_string();
+    status_state.info.is_standard = false;
+    status_state.info.ax_subrole = Some("AXDialog".to_string());
+
+    let snapshot = reactor.query_command_palette();
+
+    assert!(!snapshot.entries.iter().any(|entry| {
+        entry.id == crate::model::command_palette::PaletteEntryId::Window(status)
+    }));
+    assert!(
+        snapshot.entries.iter().any(|entry| {
+            entry.id == crate::model::command_palette::PaletteEntryId::Window(main)
+        })
+    );
+    let app_entry = snapshot
+        .entries
+        .iter()
+        .find(|entry| entry.id == crate::model::command_palette::PaletteEntryId::Application(42))
+        .expect("Typeless application entry");
+    assert_eq!(app_entry.secondary, "1 window");
+    assert!(!app_entry.show_when_empty);
+}
+
+#[test]
+fn command_palette_query_excludes_loginwindow_process() {
+    let mut reactor = test_reactor();
+    reactor.add_test_app_with_info(88, "com.apple.loginwindow", "loginwindow");
+
+    let snapshot = reactor.query_command_palette();
+
+    assert!(!snapshot.entries.iter().any(|entry| entry.app_pid == Some(88)));
+}
+
+#[test]
+fn command_palette_query_exposes_only_leaf_commands() {
+    let mut reactor = test_reactor_with_workspace_count(2);
+    let space = SpaceId::new(1);
+    let frame = CGRect::new(CGPoint::ZERO, CGSize::new(1000.0, 800.0));
+    reactor.handle_event(space_state_event(vec![frame], vec![Some(space)]));
+    reactor.send_layout_event(LayoutEvent::SpaceExposed(space, frame.size));
+
+    let snapshot = reactor.query_command_palette();
+
+    assert!(snapshot.entries.iter().any(|entry| {
+        matches!(
+            entry.action,
+            crate::model::command_palette::PaletteAction::SwitchWorkspace(1)
+        ) && entry.primary.starts_with("Switch Workspace")
+    }));
+}
+
+#[test]
+fn command_palette_query_preserves_frontmost_app_without_main_window() {
+    let mut reactor = test_reactor();
+    let pid = 77;
+    let (app_tx, _app_rx) = actor::channel();
+    let launched = Event::ApplicationLaunched {
+        pid,
+        info: AppInfo {
+            bundle_id: Some("com.example.helper".to_string()),
+            localized_name: Some("Helper".to_string()),
+        },
+        handle: AppThreadHandle::new_for_test(app_tx),
+        is_frontmost: true,
+        main_window: None,
+        visible_windows: Vec::new(),
+        window_server_info: Vec::new(),
+    };
+    let _ = reactor.main_window_tracker.handle_event(&launched);
+    let _ = reactor
+        .main_window_tracker
+        .handle_event(&Event::ApplicationGloballyActivated(pid));
+
+    let snapshot = reactor.query_command_palette();
+
+    assert_eq!(
+        snapshot.focus_origin,
+        Some(crate::model::command_palette::PaletteFocusOrigin {
+            app_pid: pid,
+            window_id: None,
+            window_server_id: None,
+        })
+    );
+}
+
+fn palette_with_parent_and_helper_apps() -> crate::model::command_palette::PaletteSnapshot {
+    let mut reactor = test_reactor();
+    let space = SpaceId::new(1);
+    let frame = CGRect::new(CGPoint::ZERO, CGSize::new(1000.0, 800.0));
+    reactor.handle_event(space_state_event(vec![frame], vec![Some(space)]));
+    reactor.add_test_app_with_info(1, "com.example.app", "Example");
+    reactor.add_test_app_with_info(2, "com.example.app.helper", "Example Helper");
+    reactor.add_test_window(WindowId::new(1, 1), WindowServerId::new(101), Some(space), frame);
+    reactor.add_test_window(WindowId::new(2, 1), WindowServerId::new(201), Some(space), frame);
+    reactor.query_command_palette()
+}
+
+#[test]
+fn command_palette_query_omits_auxiliary_application_entries() {
+    let snapshot = palette_with_parent_and_helper_apps();
+
+    assert!(!snapshot.entries.iter().any(|entry| {
+        entry.id == crate::model::command_palette::PaletteEntryId::Application(2)
+    }));
+}
+
+#[test]
+fn command_palette_search_prefers_parent_process_over_auxiliary_process() {
+    let mut model = crate::model::command_palette::PaletteModel::standard();
+    let mru = crate::model::command_palette::PaletteMru::default();
+    model.set_snapshot(palette_with_parent_and_helper_apps(), &mru);
+    model.set_query("com.example.app".to_string(), &mru);
+
+    assert_eq!(model.selected_entry().and_then(|entry| entry.app_pid), Some(1));
+}
+
+#[test]
 fn config_reload_propagates_non_keybinding_changes_to_wm_controller() {
     let mut reactor = test_reactor();
     let (wm_tx, mut wm_rx) = actor::channel();
@@ -633,15 +785,26 @@ fn direct_workspace_switch_uses_configured_display_affinity() {
         Some(external_space),
     ]));
 
-    let builtin_active =
-        reactor.layout_manager.layout_engine.workspaces().active_workspace(builtin_space);
+    let builtin_active = reactor
+        .layout_manager
+        .layout_engine
+        .workspaces()
+        .active_workspace(builtin_space);
     let external_target = reactor.test_workspace(external_space, 1);
     reactor.handle_test_layout_command(LayoutCommand::SwitchToWorkspace(1));
 
     assert_eq!(
         (
-            reactor.layout_manager.layout_engine.workspaces().active_workspace(builtin_space),
-            reactor.layout_manager.layout_engine.workspaces().active_workspace(external_space),
+            reactor
+                .layout_manager
+                .layout_engine
+                .workspaces()
+                .active_workspace(builtin_space),
+            reactor
+                .layout_manager
+                .layout_engine
+                .workspaces()
+                .active_workspace(external_space),
         ),
         (builtin_active, Some(external_target))
     );
@@ -703,15 +866,23 @@ fn direct_workspace_switch_refocuses_active_workspace_on_other_display() {
     assert_eq!(
         (
             focused,
-            reactor.layout_manager.layout_engine.workspaces().active_workspace(builtin_space),
-            reactor.layout_manager.layout_engine.workspaces().active_workspace(external_space),
+            reactor
+                .layout_manager
+                .layout_engine
+                .workspaces()
+                .active_workspace(builtin_space),
+            reactor
+                .layout_manager
+                .layout_engine
+                .workspaces()
+                .active_workspace(external_space),
         ),
         (Some(chat), Some(chat_workspace), Some(terminal_workspace))
     );
 }
 
 #[test]
-fn move_window_to_workspace_crosses_to_its_affinity_display() {
+fn move_window_to_affinity_display_keeps_resident_window_in_target_workspace() {
     let (mut apps, mut reactor) = test_context();
     reactor.config.virtual_workspaces.workspace_display_rules = vec![WorkspaceDisplayRule {
         workspace: WorkspaceSelector::Index(1),
@@ -727,7 +898,14 @@ fn move_window_to_workspace_crosses_to_its_affinity_display() {
     ]));
     apps.make_app_and_settle(&mut reactor, 1, make_windows(1));
     let window = WindowId::new(1, 1);
+    let resident = WindowId::new(2, 1);
+    let resident_wsid = WindowServerId::new(900_002);
     let target_workspace = reactor.test_workspace(external_space, 1);
+    reactor.add_test_app(resident.pid);
+    reactor.add_test_window(resident, resident_wsid, Some(external_space), external);
+    reactor.mark_test_window_visible_in_space(resident_wsid, external_space);
+    assert!(reactor.assign_test_window_to_workspace(external_space, resident, target_workspace,));
+    reactor.send_layout_event(LayoutEvent::WindowAdded(external_space, resident));
 
     reactor.handle_test_layout_command(LayoutCommand::MoveWindowToWorkspace {
         workspace: WorkspaceSelector::Index(1),
@@ -735,17 +913,39 @@ fn move_window_to_workspace_crosses_to_its_affinity_display() {
         window_id: Some(window.idx.get()),
     });
     apps.simulate_until_quiet(&mut reactor);
+    reactor
+        .state
+        .windows
+        .set_window_server_space(resident_wsid, Some(builtin_space));
+    reactor.reconcile_windows_in_authoritative_active_snapshot(
+        &[(resident_wsid, Some(builtin_space))],
+        &[],
+    );
+    let moved_frame = reactor.state.windows.window(window).unwrap().frame_monotonic;
+    let resident_frame = reactor.state.windows.window(resident).unwrap().frame_monotonic;
 
     assert_eq!(
         (
             reactor.assigned_space_for_window_id(window),
             reactor.state.windows.workspace_for_window(external_space, window),
-            reactor.layout_manager.layout_engine.workspaces().active_workspace(external_space),
+            reactor.state.windows.workspace_for_window(external_space, resident),
+            reactor.assigned_space_for_window_id(resident),
+            reactor
+                .layout_manager
+                .layout_engine
+                .workspaces()
+                .active_workspace(external_space),
+            external.contains(moved_frame.mid()),
+            external.contains(resident_frame.mid()),
         ),
         (
             Some(external_space),
             Some(target_workspace),
-            Some(target_workspace)
+            Some(target_workspace),
+            Some(external_space),
+            Some(target_workspace),
+            true,
+            true,
         )
     );
 }
@@ -787,7 +987,11 @@ fn app_rule_places_window_on_workspace_affinity_display_without_switching_worksp
         (
             reactor.assigned_space_for_window_id(window),
             reactor.test_workspace_for_window(external_space, window),
-            reactor.layout_manager.layout_engine.workspaces().active_workspace(external_space),
+            reactor
+                .layout_manager
+                .layout_engine
+                .workspaces()
+                .active_workspace(external_space),
         ),
         (
             Some(external_space),
@@ -819,6 +1023,7 @@ fn reconnecting_affinity_display_moves_existing_managed_window_back() {
     reactor.handle_event(space_state_event(vec![builtin], vec![Some(builtin_space)]));
     apps.make_app_and_settle(&mut reactor, 1, make_windows(1));
     let window = WindowId::new(1, 1);
+    let window_server_id = reactor.state.windows.window(window).unwrap().info.sys_id.unwrap();
     assert_eq!(reactor.assigned_space_for_window_id(window), Some(builtin_space));
 
     reactor.handle_event(space_state_event_with(
@@ -827,13 +1032,55 @@ fn reconnecting_affinity_display_moves_existing_managed_window_back() {
         |state| {
             state.display_set_changed = true;
             state.should_force_refresh_layout = true;
+            state.active_window_spaces.insert(window_server_id, builtin_space);
         },
     ));
-    apps.simulate_until_quiet(&mut reactor);
 
     assert_eq!(
         reactor.assigned_space_for_window_id(window),
         Some(external_space)
+    );
+}
+
+#[test]
+fn authoritative_move_to_affined_display_preserves_workspace_ordinal() {
+    let mut settings = crate::common::config::VirtualWorkspaceSettings::default();
+    settings.workspace_display_rules = vec![WorkspaceDisplayRule {
+        workspace: WorkspaceSelector::Index(1),
+        display: WorkspaceDisplayTarget::ExternalPrimary,
+    }];
+    let mut reactor = test_reactor_with_workspace_settings(&settings);
+    reactor.config.virtual_workspaces = settings;
+    let builtin = CGRect::new(CGPoint::new(0., 0.), CGSize::new(1000., 1000.));
+    let external = CGRect::new(CGPoint::new(1000., 0.), CGSize::new(1000., 1000.));
+    let builtin_space = SpaceId::new(1);
+    let external_space = SpaceId::new(2);
+    let window = WindowId::new(1, 1);
+    let window_server_id = WindowServerId::new(10_001);
+    reactor.handle_event(space_state_event(vec![builtin, external], vec![
+        Some(builtin_space),
+        Some(external_space),
+    ]));
+    reactor.add_test_window(window, window_server_id, Some(builtin_space), builtin);
+    let source_workspace = reactor.test_workspace(builtin_space, 1);
+    let target_workspace = reactor.test_workspace(external_space, 1);
+    assert!(reactor.assign_test_window_to_workspace(builtin_space, window, source_workspace));
+    reactor
+        .state
+        .windows
+        .set_window_server_space(window_server_id, Some(external_space));
+
+    reactor.reconcile_windows_in_authoritative_active_snapshot(
+        &[(window_server_id, Some(external_space))],
+        &[],
+    );
+
+    assert_eq!(
+        (
+            reactor.assigned_space_for_window_id(window),
+            reactor.test_workspace_for_window(external_space, window),
+        ),
+        (Some(external_space), Some(target_workspace))
     );
 }
 
@@ -872,7 +1119,11 @@ fn next_workspace_skips_workspaces_affined_to_other_displays() {
 
     reactor.handle_test_layout_command(LayoutCommand::NextWorkspace(None));
     assert_eq!(
-        reactor.layout_manager.layout_engine.workspaces().active_workspace(builtin_space),
+        reactor
+            .layout_manager
+            .layout_engine
+            .workspaces()
+            .active_workspace(builtin_space),
         Some(builtin_workspace)
     );
 
@@ -888,7 +1139,11 @@ fn next_workspace_skips_workspaces_affined_to_other_displays() {
     reactor.handle_test_layout_command(LayoutCommand::NextWorkspace(None));
 
     assert_eq!(
-        reactor.layout_manager.layout_engine.workspaces().active_workspace(external_space),
+        reactor
+            .layout_manager
+            .layout_engine
+            .workspaces()
+            .active_workspace(external_space),
         Some(external_workspace_two)
     );
 }
@@ -1156,31 +1411,57 @@ fn active_display_update_publishes_destination_workspace_to_menu_bar() {
     let terminal_workspace = reactor.test_workspace(right_space, 2);
     assert!(reactor.set_test_active_workspace(right_space, terminal_workspace));
     let (menu_tx, mut menu_rx) = actor::channel();
-    reactor.menu_manager.menu_tx = Some(menu_tx);
+    reactor.presentation_manager.menu_tx = Some(menu_tx);
 
     reactor.handle_event(Event::ActiveDisplayChanged {
         menu_bar_space: Some(right_space),
         command_space: Some(right_space),
     });
     let (_, event) = menu_rx.try_recv().expect("active display should publish a menu update");
-    let menu_bar::Event::Update(update) = event else {
-        panic!("expected menu update");
+    let menu_bar::Event::Snapshot(snapshot) = event else {
+        panic!("expected desktop snapshot");
     };
+    let context = snapshot.state.menu_bar_context.as_ref().expect("menu bar context");
 
-    let display = update
-        .displays
-        .iter()
-        .find(|display| display.space == right_space)
-        .expect("right display");
-    assert!(display.is_active_context);
     assert_eq!(
-        display
-            .workspaces
-            .iter()
-            .find(|workspace| workspace.is_active)
-            .map(|workspace| workspace.index),
-        Some(2)
+        (context.active_space, context.active_workspace_idx),
+        (right_space, Some(2))
     );
+}
+
+#[test]
+fn focus_change_publishes_one_committed_desktop_snapshot() {
+    let (mut apps, mut reactor) = test_context();
+    let space = SpaceId::new(1);
+    let screen = CGRect::new(CGPoint::new(0., 0.), CGSize::new(1000., 1000.));
+    let first = WindowId::new(1, 1);
+    let second = WindowId::new(1, 2);
+
+    reactor.handle_event(space_state_event(vec![screen], vec![Some(space)]));
+    reactor.handle_event(Event::ApplicationGloballyActivated(1));
+    reactor.handle_events(apps.make_app_with_opts(1, make_windows(2), Some(first), true, true));
+    apps.simulate_until_quiet(&mut reactor);
+
+    let (menu_tx, mut menu_rx) = actor::channel();
+    reactor.presentation_manager.menu_tx = Some(menu_tx);
+    reactor.handle_event(Event::ApplicationMainWindowChanged(1, Some(second), Quiet::No));
+
+    let (_, event) = menu_rx.try_recv().expect("focus change should publish a snapshot");
+    let menu_bar::Event::Snapshot(snapshot) = event else {
+        panic!("expected desktop snapshot");
+    };
+    assert!(
+        menu_rx.try_recv().is_err(),
+        "one transaction should publish once"
+    );
+    assert_eq!(snapshot.state.focused_window, Some(second));
+    assert_eq!(
+        snapshot.state.border_target.map(|target| target.window),
+        Some(second)
+    );
+
+    let context = snapshot.state.menu_bar_context.as_ref().expect("menu bar context");
+    assert!(context.windows.iter().any(|window| window.id == second && window.is_focused));
 }
 
 #[test]
@@ -1320,6 +1601,7 @@ fn discovery_with_new_window_does_not_replay_old_focus() {
         frame: screen,
         min_frame: CGSize::ZERO,
         max_frame: CGSize::ZERO,
+        corner_radius: None,
     });
     reactor.mark_test_window_visible_in_space(newest_wsid, space);
     reactor.handle_event(Event::ApplicationMainWindowChanged(1, Some(newest), Quiet::No));
@@ -1381,7 +1663,7 @@ fn queries_prefer_authoritative_active_space_over_stale_command_space() {
 }
 
 #[test]
-fn menu_bar_update_groups_visible_displays_and_keeps_command_topology_scoped() {
+fn menu_bar_snapshot_groups_visible_displays_and_keeps_command_topology_scoped() {
     let mut reactor = test_reactor();
     let left = CGRect::new(CGPoint::new(0., 0.), CGSize::new(1000., 1000.));
     let right = CGRect::new(CGPoint::new(1000., 0.), CGSize::new(1000., 1000.));
@@ -1395,49 +1677,62 @@ fn menu_bar_update_groups_visible_displays_and_keeps_command_topology_scoped() {
     reactor.handle_test_workspace_command(space1, &LayoutCommand::SwitchToWorkspace(0));
     reactor.handle_test_workspace_command(space2, &LayoutCommand::SwitchToWorkspace(1));
     let (tx, mut rx) = crate::actor::channel();
-    reactor.menu_manager.menu_tx = Some(tx);
+    reactor.presentation_manager.menu_tx = Some(tx);
 
     for context in [space1, space2] {
         reactor.space_state.menu_bar_space = Some(context);
-        reactor.maybe_send_menu_update();
-        let (_, menu_bar::Event::Update(update)) = rx.try_recv().unwrap() else {
-            panic!("expected menu update")
+        reactor.presentation_manager.projections.mark_dirty();
+        reactor.publish_desktop_snapshot();
+        let (_, menu_bar::Event::Snapshot(snapshot)) = rx.try_recv().unwrap() else {
+            panic!("expected menu snapshot")
         };
         assert_eq!(
-            update.displays.iter().map(|display| display.space).collect::<Vec<_>>(),
+            snapshot
+                .state
+                .menu_bar_displays
+                .iter()
+                .map(|display| display.space)
+                .collect::<Vec<_>>(),
             [space1, space2]
         );
         assert_eq!(
-            update.displays[0].workspaces.iter().position(|ws| ws.is_active),
+            snapshot.state.menu_bar_displays[0]
+                .workspaces
+                .iter()
+                .position(|ws| ws.is_active),
             Some(0)
         );
         assert_eq!(
-            update.displays[1].workspaces.iter().position(|ws| ws.is_active),
+            snapshot.state.menu_bar_displays[1]
+                .workspaces
+                .iter()
+                .position(|ws| ws.is_active),
             Some(1)
         );
         let expected = reactor.query_workspaces(Some(context));
+        let projected = snapshot.state.menu_bar_context.as_ref().unwrap();
         assert_eq!(
-            update
-                .context_workspaces()
-                .iter()
-                .map(|ws| (&ws.id, ws.index))
-                .collect::<Vec<_>>(),
+            projected.workspaces.iter().map(|ws| (&ws.id, ws.index)).collect::<Vec<_>>(),
             expected.iter().map(|ws| (&ws.id, ws.index)).collect::<Vec<_>>()
         );
     }
+
     reactor.space_state.screens.retain(|screen| screen.space == Some(space1));
-    reactor.maybe_send_menu_update();
-    let (_, menu_bar::Event::Update(update)) = rx.try_recv().unwrap() else {
-        panic!("expected menu update")
+    reactor.presentation_manager.projections.mark_dirty();
+    reactor.publish_desktop_snapshot();
+    let (_, menu_bar::Event::Snapshot(snapshot)) = rx.try_recv().unwrap() else {
+        panic!("expected menu snapshot")
     };
-    assert_eq!(update.displays.len(), 1);
-    assert!(update.displays[0].is_active_context);
+    assert_eq!(snapshot.state.menu_bar_displays.len(), 1);
+    assert!(snapshot.state.menu_bar_displays[0].is_active_context);
+
     reactor.space_state.screens.clear();
-    reactor.maybe_send_menu_update();
-    let (_, menu_bar::Event::Update(update)) = rx.try_recv().unwrap() else {
-        panic!("expected menu update")
+    reactor.presentation_manager.projections.mark_dirty();
+    reactor.publish_desktop_snapshot();
+    let (_, menu_bar::Event::Snapshot(snapshot)) = rx.try_recv().unwrap() else {
+        panic!("expected menu snapshot")
     };
-    assert!(update.displays.is_empty());
+    assert!(snapshot.state.menu_bar_displays.is_empty());
 }
 
 #[test]
@@ -1474,6 +1769,22 @@ fn menu_bar_space_falls_back_when_preferred_space_is_not_visible() {
         reactor.test_resolve_menu_bar_space_with_preferred(Some(hidden_space)),
         Some(visible_space),
         "menubar updates should fall back to the normal active context if the preferred menubar space is unavailable"
+    );
+}
+
+#[test]
+fn snapshot_projection_does_not_initialize_unknown_workspace_topology() {
+    let reactor = test_reactor();
+    let unknown_space = SpaceId::new(99);
+
+    assert!(reactor.snapshot_workspaces(unknown_space).is_empty());
+    assert!(
+        !reactor
+            .layout_manager
+            .layout_engine
+            .workspaces()
+            .initialized_spaces()
+            .contains(&unknown_space)
     );
 }
 
@@ -2213,6 +2524,42 @@ fn duplicate_minimize_deminimize_and_unknown_window_events_do_not_arrange() {
 }
 
 #[test]
+fn minimize_invalidates_border_before_publishing_the_committed_snapshot() {
+    let (mut apps, mut reactor) = test_context();
+    let space = SpaceId::new(1);
+    let screen = CGRect::new(CGPoint::new(0., 0.), CGSize::new(1000., 1000.));
+    let wid = WindowId::new(1, 1);
+
+    reactor.handle_event(space_state_event(vec![screen], vec![Some(space)]));
+    reactor.handle_event(Event::ApplicationGloballyActivated(1));
+    reactor.handle_events(apps.make_app_with_opts(1, make_windows(1), Some(wid), true, true));
+    apps.simulate_until_quiet(&mut reactor);
+    let wsid = reactor.state.windows.window(wid).unwrap().info.sys_id.unwrap();
+
+    let (border_tx, mut border_rx) = actor::channel();
+    reactor.presentation_manager.border_tx = Some(border_tx);
+
+    reactor.handle_event(Event::WindowMinimized(wid));
+
+    let mut invalidated = false;
+    while let Ok((_, event)) = border_rx.try_recv() {
+        match event {
+            border::Event::TargetInvalidated(window) => {
+                assert_eq!(window, wsid);
+                invalidated = true;
+            }
+            border::Event::Snapshot(snapshot) => {
+                assert!(invalidated, "snapshot must follow eager border invalidation");
+                assert!(snapshot.state.border_target.is_none());
+                return;
+            }
+            _ => {}
+        }
+    }
+    panic!("expected eager invalidation and committed desktop snapshot");
+}
+
+#[test]
 fn cross_display_drag_clears_source_floating_position() {
     let (mut reactor, wid, _wsid, space1, space2, initial_frame, screen2) =
         reactor_with_window_on_space1_two_displays();
@@ -2826,6 +3173,7 @@ fn fullscreen_does_not_suppress_other_same_pid_windows() {
             frame,
             min_frame: frame.size,
             max_frame: frame.size,
+            corner_radius: None,
         }),
         None,
     ));
@@ -3756,6 +4104,7 @@ fn native_focus_race_waits_for_new_window_activation() {
         frame,
         min_frame: CGSize::ZERO,
         max_frame: CGSize::ZERO,
+        corner_radius: None,
     };
 
     reactor.handle_event(space_state_event(vec![frame], vec![Some(space)]));
@@ -3834,6 +4183,7 @@ fn pending_activation_context() -> (Apps, Reactor, SpaceId, WindowId, WindowServ
         frame,
         min_frame: CGSize::ZERO,
         max_frame: CGSize::ZERO,
+        corner_radius: None,
     };
     (apps, reactor, space, main, info)
 }
@@ -4114,6 +4464,7 @@ fn mouse_hit_missing_from_inventory_refreshes_its_owner_once() {
         frame: CGRect::new(CGPoint::ZERO, CGSize::new(800.0, 600.0)),
         min_frame: CGSize::ZERO,
         max_frame: CGSize::ZERO,
+        corner_radius: None,
     });
     reactor.handle_event(Event::MouseMoved(wsid));
     assert!(matches!(
@@ -6962,6 +7313,7 @@ fn native_tab_creation_and_close_preserve_layout_slot_and_other_windows() {
                     frame,
                     min_frame: CGSize::ZERO,
                     max_frame: CGSize::ZERO,
+                    corner_radius: None,
                 }),
                 None,
             ));

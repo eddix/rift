@@ -210,6 +210,7 @@ impl Reactor {
             frame,
             min_frame: frame.size,
             max_frame: frame.size,
+            corner_radius: None,
         });
     }
 
@@ -520,6 +521,7 @@ impl Apps {
                         frame: info.frame,
                         min_frame: CGSize::ZERO,
                         max_frame: CGSize::ZERO,
+                        corner_radius: None,
                     })
                     .collect()
             } else {

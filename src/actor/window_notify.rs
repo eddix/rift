@@ -1,19 +1,15 @@
-use std::num::NonZeroU32;
 use std::sync::{Arc, mpsc};
 use std::time::{Duration, Instant};
 
 use tracing::{debug, trace};
 
 use super::reactor::{self, Event};
-use super::spaces;
-use crate::actor::app::WindowId;
-use crate::actor::reactor::Requested;
+use super::{border, spaces};
 use crate::common::collections::{HashMap, HashSet};
-use crate::model::tx_store::WindowTxStore;
 use crate::sys::screen::SpaceId;
 use crate::sys::skylight::{CGSEventType, KnownCGSEvent};
-use crate::sys::window_server::{self, WindowIterator, WindowServerId};
-use crate::sys::{event, window_notify};
+use crate::sys::window_notify;
+use crate::sys::window_server::{self, WindowServerId};
 
 #[derive(Default)]
 pub struct Ignored {
@@ -80,6 +76,25 @@ pub type Receiver = crate::actor::Receiver<Request>;
 
 const FOCUS_WAKE_DEBOUNCE: Duration = Duration::from_millis(1);
 
+fn is_border_order_event(event: CGSEventType) -> bool {
+    matches!(
+        event,
+        CGSEventType::Known(KnownCGSEvent::WindowReordered)
+            | CGSEventType::Known(KnownCGSEvent::WindowLevelChanged)
+            | CGSEventType::Known(KnownCGSEvent::WindowManagerActivatingClickOrdering)
+            | CGSEventType::Known(KnownCGSEvent::WindowOrderingGroupChanged)
+            | CGSEventType::Known(KnownCGSEvent::WindowParentChanged)
+    )
+}
+
+fn is_border_frame_event(event: CGSEventType) -> bool {
+    matches!(
+        event,
+        CGSEventType::Known(KnownCGSEvent::WindowMoved)
+            | CGSEventType::Known(KnownCGSEvent::WindowResized)
+    )
+}
+
 #[derive(Clone)]
 struct FocusWakeSender {
     wake: mpsc::SyncSender<()>,
@@ -95,8 +110,9 @@ pub struct WindowNotify {
     requests_rx: Option<Receiver>,
     subscribed: HashSet<CGSEventType>,
     initial_events: Vec<CGSEventType>,
-    tx_store: Option<WindowTxStore>,
     focus_wake: FocusWakeSender,
+    border_tx: border::Sender,
+    border_motion: border::BorderMotionHandle,
 }
 
 impl WindowNotify {
@@ -105,7 +121,8 @@ impl WindowNotify {
         spaces_tx: spaces::Sender,
         requests_rx: Receiver,
         initial_events: &[CGSEventType],
-        tx_store: Option<WindowTxStore>,
+        border_tx: border::Sender,
+        border_motion: border::BorderMotionHandle,
     ) -> Self {
         let (focus_wake_tx, focus_wake_rx) = mpsc::sync_channel(1);
         Self::spawn_focus_resolver(events_tx.clone(), focus_wake_rx);
@@ -115,8 +132,9 @@ impl WindowNotify {
             requests_rx: Some(requests_rx),
             subscribed: HashSet::default(),
             initial_events: initial_events.iter().copied().collect(),
-            tx_store,
             focus_wake: FocusWakeSender { wake: focus_wake_tx },
+            border_tx,
+            border_motion,
         }
     }
 
@@ -130,8 +148,9 @@ impl WindowNotify {
                 event,
                 self.events_tx.clone(),
                 self.spaces_tx.clone(),
-                self.tx_store.clone(),
                 self.focus_wake.clone(),
+                self.border_tx.clone(),
+                self.border_motion.clone(),
             ) {
                 Ok(()) => {
                     self.subscribed.insert(event);
@@ -166,8 +185,9 @@ impl WindowNotify {
                     event,
                     self.events_tx.clone(),
                     self.spaces_tx.clone(),
-                    self.tx_store.clone(),
                     self.focus_wake.clone(),
+                    self.border_tx.clone(),
+                    self.border_motion.clone(),
                 ) {
                     Ok(()) => {
                         self.subscribed.insert(event);
@@ -190,8 +210,9 @@ impl WindowNotify {
         event: CGSEventType,
         events_tx: reactor::Sender,
         spaces_tx: spaces::Sender,
-        tx_store: Option<WindowTxStore>,
         focus_wake: FocusWakeSender,
+        border_tx: border::Sender,
+        border_motion: border::BorderMotionHandle,
     ) -> Result<(), i32> {
         let res = window_notify::init(event);
         if res != 0 {
@@ -256,12 +277,25 @@ impl WindowNotify {
                         ));
                     }
                     CGSEventType::Known(KnownCGSEvent::WindowReordered)
+                    | CGSEventType::Known(KnownCGSEvent::WindowLevelChanged)
+                    | CGSEventType::Known(KnownCGSEvent::WindowManagerActivatingClickOrdering)
+                    | CGSEventType::Known(KnownCGSEvent::WindowOrderingGroupChanged)
+                    | CGSEventType::Known(KnownCGSEvent::WindowParentChanged)
                     | CGSEventType::Known(
                         KnownCGSEvent::WindowManagerSpaceFrontConnectionChanged,
                     )
                     | CGSEventType::Known(
                         KnownCGSEvent::WindowManagerGlobalFrontConnectionChanged,
-                    ) => focus_wake.notify(),
+                    ) => {
+                        focus_wake.notify();
+                        if is_border_order_event(event)
+                            && let Some(window_id) = evt.window_id
+                        {
+                            border_tx.send(border::Event::OrderInvalidated(WindowServerId::new(
+                                window_id,
+                            )));
+                        }
+                    }
                     CGSEventType::Known(
                         KnownCGSEvent::WindowHidden | KnownCGSEvent::WindowUnhidden,
                     ) => {
@@ -282,31 +316,16 @@ impl WindowNotify {
                     }
                     CGSEventType::Known(KnownCGSEvent::WindowMoved)
                     | CGSEventType::Known(KnownCGSEvent::WindowResized) => {
-                        // TODO: suppress move/resize while Mission Control is active
-                        let mouse_state = event::get_mouse_state();
+                        debug_assert!(is_border_frame_event(event));
                         let Some(window_id) = evt.window_id else {
                             continue;
                         };
                         let wsid = WindowServerId::new(window_id);
-                        if let Some(query) = WindowIterator::new(&[wsid]) {
-                            if query.advance().is_none() {
-                                continue;
+                        if let Some(bounds) = window_server::get_window_bounds(wsid) {
+                            if let Err(error) = border_motion.move_target(wsid, bounds) {
+                                trace!(?error, ?wsid, "focused-window border fast move failed");
                             }
-                            let bounds = query.bounds();
-                            let pid = query.pid();
-                            if let Some(idx) = NonZeroU32::new(window_id) {
-                                let last_seen = tx_store
-                                    .as_ref()
-                                    .and_then(|store| store.get(&wsid))
-                                    .map(|record| record.txid);
-                                events_tx.send(Event::WindowFrameChanged(
-                                    WindowId { idx, pid },
-                                    bounds,
-                                    last_seen,
-                                    Requested(false),
-                                    mouse_state,
-                                ));
-                            }
+                            border_tx.send(border::Event::FrameChanged(wsid, bounds));
                         };
                     }
                     _ => {}
@@ -332,8 +351,7 @@ impl WindowNotify {
                         }
 
                         let query_started = Instant::now();
-                        let space = window_server::active_space();
-                        let window = window_server::key_focused_window(space);
+                        let focused = window_server::key_focused_window();
                         let query_elapsed = query_started.elapsed();
 
                         // A wake queued during the SPI means this result may already
@@ -346,11 +364,10 @@ impl WindowNotify {
                         trace!(
                             wake_count,
                             ?query_elapsed,
-                            ?space,
-                            ?window,
+                            ?focused,
                             "resolved coalesced WindowServer focus"
                         );
-                        if let Some(window) = window {
+                        if let Some((window, space)) = focused {
                             events_tx.send(Event::WindowServerFocusChanged(window, space));
                         }
                         break;
@@ -363,7 +380,8 @@ impl WindowNotify {
 
 #[cfg(test)]
 mod tests {
-    use super::FocusWakeSender;
+    use super::{FocusWakeSender, is_border_frame_event, is_border_order_event};
+    use crate::sys::skylight::{CGSEventType, KnownCGSEvent};
 
     #[test]
     fn focus_wakes_coalesce_to_one_signal() {
@@ -375,5 +393,31 @@ mod tests {
         sender.notify();
 
         assert_eq!(rx.try_iter().count(), 1);
+    }
+
+    #[test]
+    fn activating_click_and_order_group_events_resync_the_border() {
+        for event in [
+            KnownCGSEvent::WindowReordered,
+            KnownCGSEvent::WindowLevelChanged,
+            KnownCGSEvent::WindowManagerActivatingClickOrdering,
+            KnownCGSEvent::WindowOrderingGroupChanged,
+            KnownCGSEvent::WindowParentChanged,
+        ] {
+            assert!(is_border_order_event(CGSEventType::Known(event)));
+        }
+        assert!(!is_border_order_event(CGSEventType::Known(
+            KnownCGSEvent::WindowMoved,
+        )));
+    }
+
+    #[test]
+    fn move_and_resize_events_use_the_border_fast_path() {
+        for event in [KnownCGSEvent::WindowMoved, KnownCGSEvent::WindowResized] {
+            assert!(is_border_frame_event(CGSEventType::Known(event)));
+        }
+        assert!(!is_border_frame_event(CGSEventType::Known(
+            KnownCGSEvent::WindowReordered,
+        )));
     }
 }
