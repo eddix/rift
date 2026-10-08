@@ -47,6 +47,7 @@ pub enum PaletteAction {
     ToggleFullscreenWithinGaps,
     SetLayout(LayoutMode),
     FocusDisplay(String),
+    ResetAllWorkspaces,
     ReloadConfig,
 }
 
