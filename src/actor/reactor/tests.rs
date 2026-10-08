@@ -277,6 +277,10 @@ fn command_palette_query_exposes_only_leaf_commands() {
             crate::model::command_palette::PaletteAction::SwitchWorkspace(1)
         ) && entry.primary.starts_with("Switch Workspace")
     }));
+    assert!(snapshot.entries.iter().any(|entry| {
+        entry.action == crate::model::command_palette::PaletteAction::ResetAllWorkspaces
+            && entry.primary == "Reset All Workspaces"
+    }));
 }
 
 #[test]
@@ -808,6 +812,93 @@ fn direct_workspace_switch_uses_configured_display_affinity() {
         ),
         (builtin_active, Some(external_target))
     );
+}
+
+#[test]
+fn reset_all_workspaces_restores_configured_placement_without_moving_unconfigured_windows() {
+    let mut settings = crate::common::config::VirtualWorkspaceSettings::default();
+    settings.app_rules = vec![AppWorkspaceRule {
+        app_id: Some("com.testapp1".to_string()),
+        workspace: Some(WorkspaceSelector::Index(1)),
+        ..Default::default()
+    }];
+    settings.workspace_display_rules = vec![WorkspaceDisplayRule {
+        workspace: WorkspaceSelector::Index(1),
+        display: WorkspaceDisplayTarget::ExternalPrimary,
+    }];
+    let mut apps = Apps::new();
+    let mut reactor = test_reactor_with_workspace_settings(&settings);
+    reactor.config.virtual_workspaces = settings;
+    let builtin = CGRect::new(CGPoint::new(0., 0.), CGSize::new(1000., 1000.));
+    let external = CGRect::new(CGPoint::new(1000., 0.), CGSize::new(1000., 1000.));
+    let builtin_space = SpaceId::new(1);
+    let external_space = SpaceId::new(2);
+    reactor.handle_event(space_state_event(vec![builtin, external], vec![
+        Some(builtin_space),
+        Some(external_space),
+    ]));
+    apps.make_app_and_settle(&mut reactor, 1, make_windows(1));
+    let configured = WindowId::new(1, 1);
+    let unconfigured = WindowId::new(2, 1);
+    let unconfigured_wsid = WindowServerId::new(900_002);
+    reactor.add_test_app(unconfigured.pid);
+    reactor.add_test_window(unconfigured, unconfigured_wsid, Some(builtin_space), builtin);
+    let builtin_workspace = reactor.test_workspace(builtin_space, 0);
+    let external_workspace = reactor.test_workspace(external_space, 1);
+    assert!(reactor.assign_test_window_to_workspace(
+        builtin_space,
+        unconfigured,
+        builtin_workspace,
+    ));
+
+    let response = reactor.layout_manager.layout_engine.move_window_to_workspace_index_on_space(
+        &mut reactor.state.windows,
+        crate::layout_engine::WorkspaceDisplayMove {
+            source_space: external_space,
+            target_space: builtin_space,
+            target_screen_size: builtin.size,
+            window: configured,
+            target_workspace_index: 0,
+            focus_target: false,
+        },
+    );
+    assert!(response.changed);
+    let configured_wsid = reactor.state.windows.window(configured).unwrap().info.sys_id.unwrap();
+    reactor
+        .state
+        .windows
+        .set_window_server_space(configured_wsid, Some(builtin_space));
+
+    let outcome = reactor
+        .dispatch_workflow(Event::Command(Command::Reactor(
+            ReactorCommand::ResetAllWorkspaces,
+        )))
+        .unwrap();
+    assert_eq!(outcome.arrange.passes, 1);
+    assert!(outcome.stdout_lines[0].starts_with("Reset 1 configured windows;"));
+    reactor.apply_event_outcome(outcome);
+
+    assert_eq!(
+        (
+            reactor.assigned_space_for_window_id(configured),
+            reactor.test_workspace_for_window(external_space, configured),
+            reactor.assigned_space_for_window_id(unconfigured),
+            reactor.test_workspace_for_window(builtin_space, unconfigured),
+        ),
+        (
+            Some(external_space),
+            Some(external_workspace),
+            Some(builtin_space),
+            Some(builtin_workspace),
+        )
+    );
+
+    let second = reactor
+        .dispatch_workflow(Event::Command(Command::Reactor(
+            ReactorCommand::ResetAllWorkspaces,
+        )))
+        .unwrap();
+    assert!(second.stdout_lines[0].starts_with("Reset 0 configured windows;"));
 }
 
 #[test]

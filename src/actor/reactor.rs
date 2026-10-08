@@ -2239,6 +2239,9 @@ impl Reactor {
                 let serialized = self.serialize_state();
                 return command_workflow::handle_command_reactor_serialize(serialized);
             }
+            Event::Command(Command::Reactor(ReactorCommand::ResetAllWorkspaces)) => {
+                return self.reset_all_workspaces();
+            }
             Event::Command(Command::Reactor(ReactorCommand::SwitchSpace(direction))) => {
                 return command_workflow::handle_switch_native_space(direction);
             }
@@ -4539,6 +4542,117 @@ impl Reactor {
         let windows =
             self.state.windows.iter_windows().map(|(window, _)| window).collect::<Vec<_>>();
         self.reconcile_workspace_affinities(windows);
+    }
+
+    fn configured_workspace_index_for_window(&self, window: WindowId) -> Option<usize> {
+        let state = self.state.windows.window(window)?;
+        let app = self.app_manager.apps.get(&window.pid)?;
+        let selector = self.layout_manager.layout_engine.configured_workspace_selector(
+            crate::model::WindowRuleContext {
+                app_bundle_id: app.info.bundle_id.as_deref().or(state.info.bundle_id.as_deref()),
+                app_name: app.info.localized_name.as_deref(),
+                window_title: Some(&state.info.title),
+                ax_role: state.info.ax_role.as_deref(),
+                ax_subrole: state.info.ax_subrole.as_deref(),
+                ax_identifier: state.info.ax_identifier.as_deref(),
+            },
+        )?;
+        self.config.virtual_workspaces.workspace_index(&selector)
+    }
+
+    fn reset_all_workspaces(&mut self) -> anyhow::Result<EventOutcome> {
+        if self.is_in_drag() {
+            return Ok(EventOutcome::no_change()
+                .with_stdout_line("Reset ignored while a window drag is active".to_string()));
+        }
+
+        let placements = self
+            .state
+            .windows
+            .iter_windows()
+            .filter(|(_, state)| state.is_admitted())
+            .filter_map(|(window, _)| {
+                self.configured_workspace_index_for_window(window)
+                    .map(|workspace| (window, workspace))
+            })
+            .collect::<Vec<_>>();
+        let mut outcome = EventOutcome::default();
+        let mut moved_windows = 0usize;
+
+        for (window, target_workspace_index) in placements {
+            let Some(source_space) = self.assigned_space_for_window_id(window) else {
+                continue;
+            };
+            let Some(target_screen) = self
+                .preferred_screen_for_workspace(target_workspace_index)
+                .cloned()
+                .or_else(|| self.space_state.screen_by_space(source_space).cloned())
+            else {
+                continue;
+            };
+            let Some(target_space) =
+                target_screen.space.filter(|space| self.is_space_active(*space))
+            else {
+                continue;
+            };
+            let current_workspace_index =
+                self.state.windows.workspace_info_for_window(window).and_then(|assignment| {
+                    self.layout_manager
+                        .layout_engine
+                        .workspaces()
+                        .workspace_index(assignment.space, assignment.workspace_id)
+                });
+            if source_space == target_space
+                && current_workspace_index == Some(target_workspace_index)
+            {
+                continue;
+            }
+
+            if source_space != target_space {
+                let nested = self.move_tracked_window_to_workspace_display(
+                    window,
+                    source_space,
+                    target_screen,
+                    target_workspace_index,
+                    false,
+                )?;
+                if self.assigned_space_for_window_id(window) == Some(target_space) {
+                    moved_windows += 1;
+                }
+                outcome.absorb(nested);
+            } else {
+                let response = self.layout_manager.layout_engine.handle_virtual_workspace_command(
+                    &mut self.state.windows,
+                    source_space,
+                    &layout::LayoutCommand::MoveWindowToWorkspace {
+                        workspace: rift_protocol::WorkspaceSelector::Index(target_workspace_index),
+                        follow: false,
+                        window_id: Some(window.idx.get()),
+                    },
+                );
+                if response.changed {
+                    moved_windows += 1;
+                    outcome = outcome.with_layout_response(response, Some(source_space));
+                }
+            }
+        }
+
+        let spaces = self
+            .space_state
+            .screens
+            .iter()
+            .filter_map(|screen| screen.space)
+            .collect::<Vec<_>>();
+        let report = self.layout_manager.layout_engine.reset_all_workspace_layouts(&spaces);
+        if moved_windows > 0 || report.configurations > 0 {
+            outcome.arrange.passes = 1;
+            outcome.arrange.space_scope = None;
+            outcome.arrange.secondary_space_scope = None;
+        }
+        Ok(outcome.with_stdout_line(format!(
+            "Reset {moved_windows} configured windows; {}",
+            report.summary()
+        )))
     }
 
     fn should_preserve_workspace_ordinal(

@@ -452,6 +452,7 @@ comb1 = "Alt + Shift"
 # - toggle_space_activated
 # - reload_config
 # - binding_mode = "default"|"<mode_name>"
+# - reset_all_workspaces
 # - save_layout = { path = "/path/to/layout.json" }
 # - restore_layout = { path = "/path/to/layout.json", scope = "workspace"|"space", source = "saved_active_space"|"current_space" }
 #   (source is optional; defaults to "saved_active_space")
@@ -594,6 +595,7 @@ comb1 = "Alt + Shift"
 "Alt + Shift + D" = "debug" # prints layout tree
 
 "Alt + Ctrl + S" = "serialize"
+# "Alt + Ctrl + R" = "reset_all_workspaces"
 "Alt + Ctrl + Q" = "save_and_exit"
 
 # Binding modes replace the active keymap until another mode is selected.

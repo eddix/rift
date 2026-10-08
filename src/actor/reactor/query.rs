@@ -850,6 +850,17 @@ impl Reactor {
                 ["configuration".to_string(), "refresh".to_string()],
                 PaletteAction::ReloadConfig,
             ),
+            command_entry(
+                "layout.reset-all".to_string(),
+                "Reset All Workspaces".to_string(),
+                [
+                    "layout".to_string(),
+                    "restore".to_string(),
+                    "configured".to_string(),
+                    "repair".to_string(),
+                ],
+                PaletteAction::ResetAllWorkspaces,
+            ),
         ]);
         for mode in [
             LayoutMode::Traditional,
