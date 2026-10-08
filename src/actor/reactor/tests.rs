@@ -1051,6 +1051,7 @@ fn reconnecting_affinity_display_moves_existing_managed_window_back() {
     reactor.handle_event(space_state_event(vec![builtin], vec![Some(builtin_space)]));
     apps.make_app_and_settle(&mut reactor, 1, make_windows(1));
     let window = WindowId::new(1, 1);
+    let window_server_id = reactor.state.windows.window(window).unwrap().info.sys_id.unwrap();
     assert_eq!(reactor.assigned_space_for_window_id(window), Some(builtin_space));
 
     reactor.handle_event(space_state_event_with(
@@ -1059,13 +1060,55 @@ fn reconnecting_affinity_display_moves_existing_managed_window_back() {
         |state| {
             state.display_set_changed = true;
             state.should_force_refresh_layout = true;
+            state.active_window_spaces.insert(window_server_id, builtin_space);
         },
     ));
-    apps.simulate_until_quiet(&mut reactor);
 
     assert_eq!(
         reactor.assigned_space_for_window_id(window),
         Some(external_space)
+    );
+}
+
+#[test]
+fn authoritative_move_to_affined_display_preserves_workspace_ordinal() {
+    let mut settings = crate::common::config::VirtualWorkspaceSettings::default();
+    settings.workspace_display_rules = vec![WorkspaceDisplayRule {
+        workspace: WorkspaceSelector::Index(1),
+        display: WorkspaceDisplayTarget::ExternalPrimary,
+    }];
+    let mut reactor = test_reactor_with_workspace_settings(&settings);
+    reactor.config.virtual_workspaces = settings;
+    let builtin = CGRect::new(CGPoint::new(0., 0.), CGSize::new(1000., 1000.));
+    let external = CGRect::new(CGPoint::new(1000., 0.), CGSize::new(1000., 1000.));
+    let builtin_space = SpaceId::new(1);
+    let external_space = SpaceId::new(2);
+    let window = WindowId::new(1, 1);
+    let window_server_id = WindowServerId::new(10_001);
+    reactor.handle_event(space_state_event(vec![builtin, external], vec![
+        Some(builtin_space),
+        Some(external_space),
+    ]));
+    reactor.add_test_window(window, window_server_id, Some(builtin_space), builtin);
+    let source_workspace = reactor.test_workspace(builtin_space, 1);
+    let target_workspace = reactor.test_workspace(external_space, 1);
+    assert!(reactor.assign_test_window_to_workspace(builtin_space, window, source_workspace));
+    reactor
+        .state
+        .windows
+        .set_window_server_space(window_server_id, Some(external_space));
+
+    reactor.reconcile_windows_in_authoritative_active_snapshot(
+        &[(window_server_id, Some(external_space))],
+        &[],
+    );
+
+    assert_eq!(
+        (
+            reactor.assigned_space_for_window_id(window),
+            reactor.test_workspace_for_window(external_space, window),
+        ),
+        (Some(external_space), Some(target_workspace))
     );
 }
 
@@ -7298,6 +7341,7 @@ fn native_tab_creation_and_close_preserve_layout_slot_and_other_windows() {
                     frame,
                     min_frame: CGSize::ZERO,
                     max_frame: CGSize::ZERO,
+                    corner_radius: None,
                 }),
                 None,
             ));

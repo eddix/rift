@@ -121,6 +121,7 @@ impl MainWindowTracker {
     pub fn app_main_window(&self, pid: pid_t) -> Option<WindowId> {
         self.apps.get(&pid)?.main_window
     }
+
     pub fn frontmost_pid(&self) -> Option<pid_t> { self.global_frontmost }
 }
 

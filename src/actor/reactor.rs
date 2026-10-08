@@ -908,9 +908,8 @@ impl Reactor {
                 preserve_missing_assignments,
             ) {
                 if let Some(space) = target {
-                    let preserve_ordinal = self
-                        .assigned_space_for_window_id(wid)
-                        .is_some_and(|assigned| invalidated_spaces.contains(&assigned));
+                    let preserve_ordinal =
+                        self.should_preserve_workspace_ordinal(wid, space, invalidated_spaces);
                     self.reassign_window_to_authoritative_space(wid, space, preserve_ordinal);
                 } else {
                     self.send_layout_event(LayoutEvent::WindowRemoved(wid));
@@ -2705,10 +2704,12 @@ impl Reactor {
             self.apply_event_outcome(nested);
         }
         for reassignment in outcome.topology_reassignments {
+            let preserve_workspace_ordinal = reassignment.preserve_workspace_ordinal
+                || self.workspace_affinity_matches_space(reassignment.window, reassignment.space);
             self.reassign_window_to_authoritative_space(
                 reassignment.window,
                 reassignment.space,
-                reassignment.preserve_workspace_ordinal,
+                preserve_workspace_ordinal,
             );
         }
 
@@ -3304,6 +3305,8 @@ impl Reactor {
             self.pending_space_change_manager.pending_space_change = Some(space_state);
             return Ok(EventOutcome::default());
         }
+        let reconcile_display_affinities =
+            space_state.display_set_changed || space_state.topology_window_delta.is_some();
         let mut outcome = EventOutcome::window_membership_changed(false, true);
         let analysis = topology_workflow::analyze_space_snapshot(
             &self.space_state,
@@ -3461,6 +3464,9 @@ impl Reactor {
             !membership_complete,
             &invalidated_spaces,
         );
+        if reconcile_display_affinities {
+            self.reconcile_all_workspace_affinities();
+        }
         self.try_apply_pending_space_change();
         if should_force_refresh_layout {
             outcome = outcome.with_arrange_passes(1);
@@ -3942,9 +3948,11 @@ impl Reactor {
             })
             .collect();
         for (wid, authoritative_space) in windows {
-            let preserve_ordinal = self
-                .assigned_space_for_window_id(wid)
-                .is_some_and(|space| invalidated_spaces.contains(&space));
+            let preserve_ordinal = self.should_preserve_workspace_ordinal(
+                wid,
+                authoritative_space,
+                invalidated_spaces,
+            );
             self.reassign_window_to_authoritative_space(wid, authoritative_space, preserve_ordinal);
         }
     }
@@ -4512,6 +4520,45 @@ impl Reactor {
                 }
             }
         }
+    }
+
+    fn reconcile_all_workspace_affinities(&mut self) {
+        if self.config.virtual_workspaces.workspace_display_rules.is_empty() {
+            return;
+        }
+        let windows =
+            self.state.windows.iter_windows().map(|(window, _)| window).collect::<Vec<_>>();
+        self.reconcile_workspace_affinities(windows);
+    }
+
+    fn should_preserve_workspace_ordinal(
+        &self,
+        window: WindowId,
+        target_space: SpaceId,
+        invalidated_spaces: &[SpaceId],
+    ) -> bool {
+        let Some(assignment) = self.state.windows.workspace_info_for_window(window) else {
+            return false;
+        };
+        invalidated_spaces.contains(&assignment.space)
+            || self.workspace_affinity_matches_space(window, target_space)
+    }
+
+    fn workspace_affinity_matches_space(&self, window: WindowId, target_space: SpaceId) -> bool {
+        let Some(assignment) = self.state.windows.workspace_info_for_window(window) else {
+            return false;
+        };
+        let Some(workspace_index) = self
+            .layout_manager
+            .layout_engine
+            .workspaces()
+            .workspace_index(assignment.space, assignment.workspace_id)
+        else {
+            return false;
+        };
+        self.preferred_screen_for_workspace(workspace_index)
+            .and_then(|screen| screen.space)
+            == Some(target_space)
     }
 
     fn handle_app_activation_workspace_switch(
@@ -5118,8 +5165,9 @@ impl Reactor {
             // a fallback, otherwise that raise can steal focus from the new tab.
             #[cfg(not(test))]
             let native_focus = matches!(event, LayoutEvent::WindowRemoved(_))
-                .then(|| window_server::key_focused_window(space))
-                .flatten();
+                .then(window_server::key_focused_window)
+                .flatten()
+                .and_then(|(window, focused_space)| (focused_space == space).then_some(window));
             #[cfg(test)]
             let native_focus = self.native_focus_for_removal;
             if matches!(event, LayoutEvent::WindowRemoved(_))
