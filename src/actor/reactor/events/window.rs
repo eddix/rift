@@ -272,6 +272,7 @@ pub fn handle_window_frame_changed(
     };
     let server_id = window.info.sys_id;
     let old_frame = window.frame_monotonic;
+    let is_admitted = window.is_admitted();
 
     if !old_space_active && !new_space_active {
         return Ok(outcome);
@@ -282,6 +283,19 @@ pub fn handle_window_frame_changed(
     if let Some(window) = state.windows.window_mut(wid) {
         window.frame_monotonic = new_frame;
     }
+
+    if !is_admitted {
+        if old_space != new_space
+            && let Some(server_id) = server_id
+        {
+            state.windows.set_window_server_space(server_id, new_space);
+            if new_space.is_some() {
+                state.windows.mark_window_visible(server_id);
+            }
+        }
+        return Ok(outcome);
+    }
+
     // An adjusted acknowledgement of our own frame write is not a new native drag.
     if matches!(
         drag.actor.kind(),
