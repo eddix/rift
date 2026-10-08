@@ -1144,3 +1144,34 @@ fn replacing_shortcuts_is_atomic_and_scoped_to_the_reviewed_mode() {
     assert_eq!(reopened.keys, source.keys);
     assert_eq!(reopened.binding_modes, source.binding_modes);
 }
+
+
+#[test]
+fn unmanaged_focus_commands_parse_from_key_bindings() {
+    #[derive(Deserialize)]
+    struct TestConfig {
+        keys: HashMap<String, WmCommand>,
+    }
+
+    let config: TestConfig = toml::from_str(
+        r#"
+        [keys]
+        toggle = "toggle_focus_unmanaged"
+        cycle = "cycle_unmanaged_windows"
+        "#,
+    )
+    .unwrap();
+
+    assert_eq!(
+        (&config.keys["toggle"], &config.keys["cycle"]),
+        (
+            &WmCommand::ReactorCommand(reactor::Command::Reactor(
+                reactor::ReactorCommand::ToggleFocusUnmanaged
+            )),
+            &WmCommand::ReactorCommand(reactor::Command::Reactor(
+                reactor::ReactorCommand::CycleUnmanagedWindows
+            ))
+        )
+    );
+
+}

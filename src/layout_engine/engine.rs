@@ -1608,8 +1608,10 @@ impl LayoutEngine {
         space: SpaceId,
         wid: WindowId,
     ) -> bool {
-        // Layout admission projects lifecycle state; it cannot restore AX validity.
-        if window_store.is_temporarily_unavailable(wid) {
+        // Layout admission cannot restore AX validity or explicit exclusions.
+        if window_store.is_temporarily_unavailable(wid)
+            || window_store.window(wid).is_some_and(|window| window.manage_override == Some(false))
+        {
             return false;
         }
 

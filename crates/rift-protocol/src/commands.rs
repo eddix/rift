@@ -220,6 +220,8 @@ pub enum ReactorCommand {
         window_id: WindowId,
         window_server_id: Option<u32>,
     },
+    ToggleFocusUnmanaged,
+    CycleUnmanagedWindows,
     #[command(skip)]
     ShowMissionControlAll,
     #[command(skip)]
