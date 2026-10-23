@@ -1590,13 +1590,12 @@ impl LayoutEngine {
             self.floating_positions.remove_window(wid);
             self.forget_persisted_window(wid);
             self.evicted.remove(&wid);
+            self.window_layout_constraints.remove(&wid);
         }
 
         if self.focused_window == Some(wid) {
             self.focused_window = None;
         }
-        self.window_layout_constraints.remove(&wid);
-
         if let Some(space) = removal {
             self.broadcast_windows_changed(window_store, space);
         }
@@ -5112,6 +5111,39 @@ mod tests {
             assert_eq!(window_store.workspace_for_window(window), Some(target));
             assert_eq!(engine.get_floating_position(target, window), Some(frame));
         }
+    }
+
+    #[test]
+    fn temporary_window_removal_preserves_fixed_axis_constraints() {
+        let mut engine = test_engine();
+        let mut store = WindowStore::default();
+        let source = SpaceId::new(91);
+        let destination = SpaceId::new(92);
+        let screen = CGSize::new(1440.0, 900.0);
+        let window = WindowId::new(8, 1);
+        for space in [source, destination] {
+            let _ = engine.handle_event(&mut store, LayoutEvent::SpaceExposed(space, screen));
+        }
+        let mut info = window_layout_info(window, CGSize::new(740.0, 600.0));
+        info.min_size = Some(CGSize::new(740.0, 470.0));
+        info.max_size = Some(CGSize::new(740.0, f64::INFINITY));
+        let _ = engine.handle_event(
+            &mut store,
+            LayoutEvent::windows_observed(source, window.pid, vec![info], None),
+        );
+        let _ = engine.handle_event(&mut store, LayoutEvent::WindowRemovedPreserveFloating(window));
+        let _ = engine.handle_event(&mut store, LayoutEvent::WindowAdded(destination, window));
+        let workspace = engine.workspaces.active_workspace(destination).unwrap();
+        let frames = engine.calculate_layout_for_workspace(
+            &store,
+            destination,
+            workspace,
+            CGRect::new(CGPoint::new(1440.0, 0.0), screen),
+            &Default::default(),
+            Default::default(),
+        );
+        let accepted = frames.iter().find(|(wid, _)| *wid == window).unwrap().1;
+        assert_eq!(accepted.size.width, 740.0);
     }
 
     #[test]
