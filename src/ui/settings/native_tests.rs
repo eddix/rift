@@ -919,6 +919,7 @@ pub fn run(ui: Ui) {
         autoreleasepool(|_| {
             use objc2_app_kit::NSTextField;
             settings.refresh_displays(vec![crate::sys::screen::ScreenInfo {
+                is_builtin: false,
                 id: crate::sys::screen::ScreenId::new(7),
                 display_uuid: "disp-a".into(),
                 name: Some("Display A".into()),
@@ -2275,6 +2276,7 @@ pub fn render(
             (2, "builtin", "Built-in Retina Display"),
         ] {
             displays.push(ScreenInfo {
+                is_builtin: id == 2,
                 id: crate::sys::screen::ScreenId::new(id),
                 frame: CGRect::new(CGPoint::new(0.0, 0.0), CGSize::new(1512.0, 982.0)),
                 is_builtin: false,
