@@ -27,7 +27,7 @@ use objc2_foundation::{
 };
 use tokio::sync::mpsc::UnboundedSender;
 
-use crate::actor::menu_bar::{DisplayWorkspaces as DisplayWorkspaceContext, Workspace};
+use crate::actor::menu_bar::{DisplayWorkspaces, Workspace};
 use crate::actor::reactor::{
     Command as ReactorTopCommand, Event as ReactorEvent, ReactorCommand, Sender as ReactorSender,
 };
@@ -296,7 +296,7 @@ impl MenuIcon {
 
     pub fn update_status_icon(
         &mut self,
-        displays: &[DisplayWorkspaceContext],
+        displays: &[DisplayWorkspaces],
         settings: &MenuBarSettings,
         binding_mode: &str,
     ) {
@@ -391,7 +391,7 @@ struct WorkspaceRenderInput<'a> {
 }
 
 fn render_inputs<'a>(
-    displays: &'a [DisplayWorkspaceContext],
+    displays: &'a [DisplayWorkspaces],
     settings: &MenuBarSettings,
 ) -> Vec<WorkspaceRenderInput<'a>> {
     let show_windows = settings.display_style == WorkspaceDisplayStyle::Layout;
@@ -1330,9 +1330,9 @@ mod layout_library_tests {
         assert_eq!(centered_origin(-2.0, 15.0, 5.0), 3.0);
     }
 
-    fn displays() -> Vec<DisplayWorkspaceContext> {
+    fn displays() -> Vec<DisplayWorkspaces> {
         (1..=2)
-            .map(|number| DisplayWorkspaceContext {
+            .map(|number| DisplayWorkspaces {
                 display_uuid: format!("display-{number}"),
                 space: SpaceId::new(number),
                 is_active_context: number == 1,

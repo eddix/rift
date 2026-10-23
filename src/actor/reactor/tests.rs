@@ -8459,7 +8459,7 @@ fn binding_mode_changes_update_query_state_before_broadcast() {
     let (tx, mut rx) = crate::actor::channel();
     reactor.communication_manager.event_broadcaster = tx;
     let (menu_tx, mut menu_rx) = crate::actor::channel();
-    reactor.menu_manager.menu_tx = Some(menu_tx);
+    reactor.presentation_manager.menu_tx = Some(menu_tx);
     assert_eq!(reactor.binding_mode, "default");
     reactor.handle_loop_event(Event::BindingModeChanged { mode: "resize".into() });
     assert_eq!(reactor.binding_mode, "resize");
@@ -9904,6 +9904,10 @@ fn authoritative_display_membership_round_trip_preserves_ordered_stack() {
                     Some(windows[1]),
                     "navigation must actually select the other surviving member"
                 );
+                // Complete the native focus edge after simulated navigation. The
+                // downstream tracker treats WindowServer focus as authoritative.
+                reactor.handle_event(Event::WindowServerFocusChanged(windows[1], origin));
+                assert_eq!(reactor.main_window(), survivor_focus);
                 let navigated =
                     reactor.query_layout_state(Some(origin.get()), None).unwrap().container_tree;
                 for (&wsid, &space) in &repeated.active_window_spaces {

@@ -1100,7 +1100,7 @@ impl Reactor {
             Event::BindingModeChanged { mode } => {
                 if self.binding_mode != mode {
                     let previous_mode = std::mem::replace(&mut self.binding_mode, mode.clone());
-                    if let Some(tx) = &self.menu_manager.menu_tx {
+                    if let Some(tx) = &self.presentation_manager.menu_tx {
                         tx.send(menu_bar::Event::BindingModeChanged(mode.clone()));
                     }
                     let _ = self
@@ -3716,7 +3716,7 @@ impl Reactor {
             return Ok(EventOutcome::default());
         }
         let reconcile_display_affinities =
-            space_state.display_set_changed || space_state.topology_window_delta.is_some();
+            space_state.display_set_changed || space_state.should_force_refresh_layout;
         let mut outcome = EventOutcome::window_membership_changed(false, true);
         let analysis = topology_workflow::analyze_space_snapshot(
             &self.space_state,

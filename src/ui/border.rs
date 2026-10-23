@@ -1,3 +1,4 @@
+use cgs::with_disabled_actions;
 use objc2::rc::Retained;
 use objc2_app_kit::NSColor;
 use objc2_core_foundation::{CFRetained, CGPoint, CGRect, CGSize};
@@ -11,7 +12,7 @@ use crate::sys::cgs_window::{CgsWindow, CgsWindowError, CgsWindowMotionHandle};
 use crate::sys::screen::SpaceId;
 use crate::sys::skylight::SLSWindowTags;
 use crate::sys::window_server::{self, WindowServerId};
-use crate::ui::common::{render_layer_to_context, with_disabled_actions};
+use crate::ui::common::render_layer_to_context;
 
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct BorderStyle {
