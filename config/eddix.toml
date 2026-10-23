@@ -1,0 +1,204 @@
+[settings]
+animate = false
+animation_duration = 0.15
+animation_fps = 120.0
+default_disable = false
+mouse_follows_focus = false
+mouse_hides_on_focus = false
+focus_follows_mouse = false
+auto_focus_blacklist = [
+  "com.apple.Spotlight",
+  "com.apple.dock",
+  "com.apple.systemuiserver",
+]
+hot_reload = true
+
+[settings.gestures]
+enabled = true
+consume_dock_swipe = true
+invert_horizontal_swipe = false
+swipe_vertical_tolerance = 0.4
+skip_empty = true
+fingers = 3
+distance_pct = 0.08
+haptics_enabled = true
+
+[settings.drag_drop]
+enabled = true
+modifier = "fn"
+action1 = "move"
+action2 = "none"
+drop_action = "swap"
+drop_zone_fraction = 0.25
+preview = true
+
+[settings.layout]
+mode = "traditional"
+window_insertion_point = "next_to_selection"
+
+[settings.layout.traditional]
+equalize_nodes = true
+
+[settings.layout.gaps.outer]
+top = 8
+left = 8
+bottom = 8
+right = 8
+
+[settings.layout.gaps.inner]
+horizontal = 8
+vertical = 8
+
+[settings.layout.stack]
+stack_offset = 28.0
+default_orientation = "horizontal"
+window_insertion_point = "end_of_tree"
+
+[settings.layout.scrolling]
+column_width_ratio = 0.8
+preserve_window_sizes = false
+expand_single_column = true
+min_column_width_ratio = 0.3
+max_column_width_ratio = 0.9
+alignment = "center"
+focus_navigation_style = "anchored"
+animate = false
+window_insertion_point = "end_of_tree"
+
+[settings.ui.menu_bar]
+enabled = true
+show_empty = false
+mode = "active"
+active_label = "index"
+display_style = "label"
+
+[settings.ui.border]
+enabled = true
+width = 4.0
+color = 0xff7D9C65
+corner_radius = 10.0
+adaptive_corner_radius = true
+hidpi = true
+
+[settings.ui.command_palette]
+enabled = true
+max_results = 8
+width = 640.0
+
+[virtual_workspaces]
+enabled = true
+default_workspace_count = 5
+auto_assign_windows = true
+preserve_focus_per_workspace = true
+workspace_auto_back_and_forth = false
+prevent_wrapping = false
+default_workspace = 0
+workspace_names = ["1", "2", "3", "4", "5"]
+
+workspace_rules = [
+  { workspace = 3, layout = "scrolling" },
+]
+
+workspace_display_rules = [
+  { workspace = 0, display = "built_in" },
+  { workspace = 1, display = "external_primary" },
+  { workspace = 2, display = "external_primary" },
+  { workspace = 3, display = "external_primary" },
+  # Workspace 5 is intentionally unbound: it is the scratch workspace of
+  # whichever display currently owns the command context.
+]
+
+app_rules = [
+  # Keep transient dialogs managed, but out of the tiling tree.
+  { ax_subrole = "AXDialog", floating = true },
+  { ax_subrole = "AXSystemDialog", floating = true },
+  { ax_role = "AXSheet", floating = true },
+  { app_id = "com.volcengine.corplink", floating = true },
+  { app_id = "com.apple.systempreferences", floating = true },
+
+  # Workspace 1: communication.
+  { app_id = "com.electron.lark", workspace = 0 },
+  { app_id = "com.tencent.xinWeChat", workspace = 0 },
+  { app_id = "ru.keepcoder.Telegram", workspace = 0 },
+  { app_id = "org.telegram.desktop", workspace = 0 },
+  { app_id = "com.tencent.imamac", workspace = 0 },
+
+  # Workspace 2: web.
+  { app_id = "company.thebrowser.Browser", ax_identifier_regex = "^littleBrowserWindow-", workspace = 1, manage = true },
+  { app_id = "company.thebrowser.Browser", workspace = 1 },
+
+  # Workspace 3: terminals and Herdr. Zed intentionally remains movable.
+  { app_id = "com.mitchellh.ghostty", workspace = 2 },
+  { app_id = "so.pen.herdr-gpui", workspace = 2 },
+  { app_id = "com.apple.Terminal", workspace = 2 },
+
+  # Workspace 4: AI tools.
+  { app_id = "com.openai.codex", workspace = 3 },
+  { app_id = "com.moonshot.kimichat", workspace = 3 },
+  { app_id = "dev.zcode.app", workspace = 3 },
+  { app_id = "com.bot.pc.doubao", workspace = 3 },
+  { app_id = "com.anthropic.claudefordesktop", workspace = 3 },
+  { app_id = "ai.perplexity.macv3", workspace = 3 },
+]
+
+[keys]
+"Alt + P" = "toggle_command_palette"
+"Alt + Shift + P" = "toggle_command_palette_commands"
+"Alt + H" = { move_focus = "left" }
+"Alt + J" = { move_focus = "down" }
+"Alt + K" = { move_focus = "up" }
+"Alt + L" = { move_focus = "right" }
+
+"Alt + Shift + H" = { move_node = "left" }
+"Alt + Shift + J" = { move_node = "down" }
+"Alt + Shift + K" = { move_node = "up" }
+"Alt + Shift + L" = { move_node = "right" }
+
+"Alt + 1" = { switch_to_workspace = 0 }
+"Alt + 2" = { switch_to_workspace = 1 }
+"Alt + 3" = { switch_to_workspace = 2 }
+"Alt + 4" = { switch_to_workspace = 3 }
+"Alt + 5" = { switch_to_workspace = 4 }
+
+"Alt + Shift + 1" = { move_window_to_workspace = { workspace = 0, follow = true } }
+"Alt + Shift + 2" = { move_window_to_workspace = { workspace = 1, follow = true } }
+"Alt + Shift + 3" = { move_window_to_workspace = { workspace = 2, follow = true } }
+"Alt + Shift + 4" = { move_window_to_workspace = { workspace = 3, follow = true } }
+"Alt + Shift + 5" = { move_window_to_workspace = { workspace = 4, follow = true } }
+
+"Alt + Ctrl + H" = "prev_workspace"
+"Alt + Ctrl + L" = "next_workspace"
+"Alt + Ctrl + R" = "reset_all_workspaces"
+"Alt + Tab" = "switch_to_last_workspace"
+
+"Alt + Ctrl + 1" = { set_workspace_layout = { mode = "traditional" } }
+"Alt + Ctrl + 2" = { set_workspace_layout = { mode = "bsp" } }
+"Alt + Ctrl + 3" = { set_workspace_layout = { mode = "master_stack" } }
+"Alt + Ctrl + 4" = { set_workspace_layout = { mode = "scrolling" } }
+
+"Alt + Comma" = "prev_window"
+"Alt + Period" = "next_window"
+"Alt + U" = "toggle_focus_unmanaged"
+"Alt + Shift + U" = "cycle_unmanaged_windows"
+"Alt + Ctrl + Comma" = { focus_display = "left" }
+"Alt + Ctrl + Period" = { focus_display = "right" }
+
+"Alt + F" = "toggle_fullscreen_within_gaps"
+"Alt + Shift + F" = "toggle_fullscreen"
+"Alt + T" = "toggle_window_floating"
+"Alt + Ctrl + T" = "toggle_focus_floating"
+"Alt + Minus" = { resize_window_shrink = "smart" }
+"Alt + Equal" = { resize_window_grow = "smart" }
+
+"Alt + Shift + Left" = { join_window = "left" }
+"Alt + Shift + Right" = { join_window = "right" }
+"Alt + Shift + Up" = { join_window = "up" }
+"Alt + Shift + Down" = { join_window = "down" }
+"Alt + S" = "toggle_stack"
+"Alt + Slash" = "toggle_orientation"
+"Alt + Ctrl + E" = "unjoin_windows"
+
+"Alt + Enter" = { exec = ["/usr/bin/open", "-a", "Ghostty"] }
+"Alt + Shift + D" = "debug"
+"Alt + Ctrl + S" = "serialize"
+"Alt + Ctrl + Q" = "save_and_exit"
