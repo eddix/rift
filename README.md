@@ -54,6 +54,36 @@ Get up and running via the docs:
 [<kbd><br>quick start<br></kbd>][quick_start]
 <br>
 
+## eddix build and configuration
+
+The `eddix/main` branch contains the downstream features used by the personal
+configuration in [`config/eddix.toml`](config/eddix.toml), including workspace
+display affinity, borders, the command palette, and AX identifier rules.
+
+To use this build on another Mac:
+
+```sh
+git clone --branch eddix/main https://github.com/eddix/rift.git
+cd rift
+cargo build --locked --release --bins
+mkdir -p "$HOME/.local/bin" "$HOME/.config/rift"
+```
+
+If that Mac already runs a locally signed Rift, sign the new binaries with its
+existing code-signing identity before replacing them. Back up any existing
+configuration, then install:
+
+```sh
+install -m 755 target/release/rift target/release/rift-cli "$HOME/.local/bin/"
+cp config/eddix.toml "$HOME/.config/rift/config.toml"
+"$HOME/.local/bin/rift" service start
+```
+
+Use `service restart` when updating an existing service. A fresh installation
+needs Accessibility permission. Display rules use `built_in` and
+`external_primary`, without machine-specific display UUIDs; workspace 5 remains
+an independent scratch workspace on each display.
+
 ## community
 
 Join [#rift:matrix.org](https://matrix.to/#/#rift:matrix.org) for discussion, support, and development.
