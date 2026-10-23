@@ -27,6 +27,7 @@ use objc2_foundation::{
 };
 use tokio::sync::mpsc::UnboundedSender;
 
+use crate::actor::menu_bar::{DisplayWorkspaces as DisplayWorkspaceContext, Workspace};
 use crate::actor::reactor::{
     Command as ReactorTopCommand, Event as ReactorEvent, ReactorCommand, Sender as ReactorSender,
 };
@@ -36,8 +37,6 @@ use crate::common::config::{
     WorkspaceSelector, restore_file,
 };
 use crate::layout_engine::{LayoutCommand, LayoutEngine, RestoreScope, RestoreSource};
-use crate::model::projection::DisplayWorkspaceContext;
-use crate::model::server::RuntimeWorkspaceData;
 use crate::sys::hotkey::{Hotkey, KeyCode, Modifiers};
 use crate::sys::screen::SpaceId;
 use crate::ui::common::compute_window_layout_metrics;

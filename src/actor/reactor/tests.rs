@@ -8074,11 +8074,10 @@ fn empty_active_space_membership_during_wake_race_does_not_blank_known_active_wi
 
     reactor.mark_test_window_visible_in_space(wsid, space);
 
-    crate::sys::window_server::set_space_window_list_for_connection_override(Some(vec![]));
+    reactor.space_state.active_window_spaces.clear();
     reactor.space_state.membership_complete = false;
     let active_windows = reactor.authoritative_active_space_windows();
     reactor.reconcile_authoritative_active_window_snapshot(active_windows, true, &[]);
-    crate::sys::window_server::set_space_window_list_for_connection_override(None);
 
     assert!(
         reactor.state.windows.is_window_visible(wsid),

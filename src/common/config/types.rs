@@ -1004,7 +1004,7 @@ impl Default for MenuBarSettings {
 #[derive(Serialize, Deserialize, Debug, PartialEq, Clone, Copy)]
 #[serde(deny_unknown_fields)]
 pub struct BorderSettings {
-    #[serde(default = "no")]
+    #[serde(default)]
     pub enabled: bool,
     #[serde(default = "default_border_width")]
     pub width: f64,
@@ -1253,7 +1253,7 @@ pub struct MissionControlSettings {
 #[derive(Serialize, Deserialize, Debug, PartialEq, Clone, Copy)]
 #[serde(deny_unknown_fields)]
 pub struct CommandPaletteSettings {
-    #[serde(default = "no")]
+    #[serde(default)]
     pub enabled: bool,
     /// Number of result rows visible before the complete result set scrolls.
     #[serde(default = "default_command_palette_max_results")]

@@ -289,17 +289,6 @@ impl Dispatcher {
         {
             border_tx.send(border::Event::OrderInvalidated(WindowServerId::new(window_id)));
         }
-        if is_border_frame_event(event)
-            && let Some(window_id) = evt.window_id
-        {
-            let wsid = WindowServerId::new(window_id);
-            if let Some(bounds) = window_server::get_window_bounds(wsid) {
-                if let Err(error) = border_motion.move_target(wsid, bounds) {
-                    trace!(?error, ?wsid, "focused-window border fast move failed");
-                }
-                border_tx.send(border::Event::FrameChanged(wsid, bounds));
-            }
-        }
 
         match event {
             CGSEventType::Known(KnownCGSEvent::WindowClosed) => {
@@ -368,6 +357,7 @@ impl Dispatcher {
             }
             CGSEventType::Known(KnownCGSEvent::WindowMoved)
             | CGSEventType::Known(KnownCGSEvent::WindowResized) => {
+                debug_assert!(is_border_frame_event(event));
                 // TODO: suppress move/resize while Mission Control is active
                 let mouse_state = event::get_mouse_state();
                 let Some(window_id) = evt.window_id else {
@@ -379,6 +369,10 @@ impl Dispatcher {
                         return;
                     }
                     let bounds = query.bounds();
+                    if let Err(error) = border_motion.move_target(wsid, bounds) {
+                        trace!(?error, ?wsid, "focused-window border fast move failed");
+                    }
+                    border_tx.send(border::Event::FrameChanged(wsid, bounds));
                     let pid = query.pid();
                     if let Some(idx) = NonZeroU32::new(window_id) {
                         let last_seen = tx_store

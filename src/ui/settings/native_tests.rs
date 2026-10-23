@@ -237,6 +237,7 @@ pub fn run(ui: Ui) {
             .view
             .clone();
         settings.refresh_displays(vec![crate::sys::screen::ScreenInfo {
+            is_builtin: false,
             id: crate::sys::screen::ScreenId::new(1),
             display_uuid: "test-display".into(),
             name: Some("Test display".into()),
@@ -823,6 +824,7 @@ pub fn run(ui: Ui) {
             use crate::sys::screen::NSScreenExt;
             let screen = settings.window.ns_window().screen().unwrap();
             settings.refresh_displays(vec![crate::sys::screen::ScreenInfo {
+                is_builtin: false,
                 id: screen.get_number().unwrap(),
                 display_uuid: "focused-display".into(),
                 name: Some("Focused display".into()),
