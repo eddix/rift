@@ -2840,8 +2840,7 @@ fn minimize_invalidates_border_before_publishing_the_committed_snapshot() {
     panic!("expected eager invalidation and committed desktop snapshot");
 }
 
-#[test]
-fn cross_display_drag_clears_source_floating_position() {
+fn assert_cross_display_drag_preserves_floating(modifier: bool) {
     let (mut reactor, wid, _wsid, space1, space2, initial_frame, screen2) =
         reactor_with_window_on_space1_two_displays();
     let source_workspace = reactor
@@ -2871,17 +2870,26 @@ fn cross_display_drag_clears_source_floating_position() {
         CGPoint::new(screen2.origin.x + 120.0, initial_frame.origin.y),
         initial_frame.size,
     );
-    reactor.drag_manager.actor.begin_native(
-        crate::actor::drag::DragSource {
-            window: wid,
-            origin_frame: initial_frame,
-            last_frame: moved_frame,
-            origin_space: None,
-            current_space: Some(space2),
-            tiled: false,
-        },
-        crate::actor::drag::DragScene::default(),
-    );
+    let source = crate::actor::drag::DragSource {
+        window: wid,
+        origin_frame: initial_frame,
+        last_frame: moved_frame,
+        origin_space: Some(space1),
+        current_space: Some(space2),
+        tiled: false,
+    };
+    let scene = crate::actor::drag::DragScene::default();
+    if modifier {
+        reactor.drag_manager.actor.begin_modifier(
+            source,
+            moved_frame.mid(),
+            crate::common::config::MouseAction::Move,
+            scene,
+        );
+    } else {
+        reactor.drag_manager.actor.begin_native(source, scene);
+    }
+    reactor.state.windows.window_mut(wid).unwrap().frame_monotonic = moved_frame;
 
     let outcome = crate::actor::reactor::events::drag::handle_mouse_up(
         &mut reactor.state,
@@ -2895,6 +2903,11 @@ fn cross_display_drag_clears_source_floating_position() {
     .unwrap();
     assert!(outcome.arrange.passes > 0);
     assert!(!reactor.drag_manager.actor.is_active());
+    reactor.apply_event_outcome(outcome);
+    assert!(reactor.layout_manager.layout_engine.is_window_floating(wid));
+    let destination = reactor.query_layout_state(Some(space2.get()), None).unwrap();
+    assert_eq!(destination.floating_windows, vec![wid.into()]);
+    assert!(destination.tiled_windows.is_empty());
 
     assert_eq!(reactor.assigned_space_for_window_id(wid), Some(space2));
     assert_eq!(
@@ -2912,6 +2925,52 @@ fn cross_display_drag_clears_source_floating_position() {
             .get_floating_position(target_workspace, wid),
         Some(moved_frame)
     );
+}
+
+#[test]
+fn cross_display_drag_preserves_floating_and_release_position() {
+    assert_cross_display_drag_preserves_floating(false);
+}
+
+#[test]
+fn cross_display_modifier_drag_preserves_floating_and_release_position() {
+    assert_cross_display_drag_preserves_floating(true);
+}
+
+#[test]
+fn cross_display_drag_keeps_tiled_windows_in_the_destination_tree_only() {
+    let (mut reactor, wid, _wsid, source, destination, initial, screen) =
+        reactor_with_window_on_space1_two_displays();
+    reactor.send_layout_event(LayoutEvent::WindowAdded(source, wid));
+    let moved = CGRect::new(CGPoint::new(screen.origin.x + 120.0, 100.0), initial.size);
+    reactor.state.windows.window_mut(wid).unwrap().frame_monotonic = moved;
+    reactor.drag_manager.actor.begin_native(
+        crate::actor::drag::DragSource {
+            window: wid,
+            origin_frame: initial,
+            last_frame: moved,
+            origin_space: Some(source),
+            current_space: Some(destination),
+            tiled: true,
+        },
+        crate::actor::drag::DragScene::default(),
+    );
+    let outcome = crate::actor::reactor::events::drag::handle_mouse_up(
+        &mut reactor.state,
+        &mut reactor.layout_manager,
+        &mut reactor.drag_manager,
+        crate::actor::reactor::events::drag::MouseUpPayload {
+            button: crate::actor::drag::MouseButton::Left,
+            final_space: Some(destination),
+        },
+    )
+    .unwrap();
+    reactor.apply_event_outcome(outcome);
+    let source_layout = reactor.query_layout_state(Some(source.get()), None).unwrap();
+    let destination_layout = reactor.query_layout_state(Some(destination.get()), None).unwrap();
+    assert!(source_layout.tiled_windows.is_empty());
+    assert_eq!(destination_layout.tiled_windows, vec![wid.into()]);
+    assert!(destination_layout.floating_windows.is_empty());
 }
 
 #[test]

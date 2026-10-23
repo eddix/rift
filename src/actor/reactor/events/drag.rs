@@ -105,9 +105,13 @@ pub fn handle_mouse_up(
     }
 
     if commit.source.origin_space != payload.final_space {
-        if commit.source.origin_space.is_some() {
-            outcome = outcome.with_layout_event(LayoutEvent::WindowRemoved(window));
-        }
+        // Detach before reassignment so source membership is still available.
+        // A display move must not forget floating state or size constraints.
+        let removal = layout.layout_engine.handle_event(
+            &mut state.windows,
+            LayoutEvent::WindowRemovedPreserveFloating(window),
+        );
+        outcome = outcome.with_layout_response(removal.response, None);
         if let Some(space) = payload.final_space
             && state.windows.window(window).is_some_and(WindowState::is_admitted)
         {
