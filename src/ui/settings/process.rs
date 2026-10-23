@@ -654,6 +654,7 @@ fn screen(display: DisplayData) -> ScreenInfo {
     let rift_client::Rect { origin, size } = display.frame;
     ScreenInfo {
         id: ScreenId::new(display.screen_id),
+        is_builtin: unsafe { crate::sys::skylight::CGDisplayIsBuiltin(display.screen_id) },
         frame: CGRect::new(
             CGPoint::new(origin.x, origin.y),
             CGSize::new(size.width, size.height),

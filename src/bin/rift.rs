@@ -348,6 +348,7 @@ Enable it in System Settings > Desktop & Dock (Mission Control) and restart Rift
         ],
         border_tx.clone(),
         border_motion.clone(),
+        Some(window_tx_store.clone()),
     );
 
     let notification_center =
