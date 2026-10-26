@@ -1008,9 +1008,18 @@ pub struct BorderSettings {
     pub enabled: bool,
     #[serde(default = "default_border_width")]
     pub width: f64,
-    /// Color encoded as ARGB, for example `0xfff37021`.
+    /// Fallback color encoded as ARGB, for example `0xfff37021`.
     #[serde(default = "default_border_color")]
     pub color: u32,
+    /// Optional color for managed windows in the tiling tree.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub tiled_color: Option<u32>,
+    /// Optional color for managed floating windows.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub floating_color: Option<u32>,
+    /// Optional color for windows excluded from layout management.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub unmanaged_color: Option<u32>,
     #[serde(default = "default_border_corner_radius")]
     pub corner_radius: f64,
     #[serde(default = "yes")]
@@ -1025,6 +1034,9 @@ impl Default for BorderSettings {
             enabled: false,
             width: default_border_width(),
             color: default_border_color(),
+            tiled_color: None,
+            floating_color: None,
+            unmanaged_color: None,
             corner_radius: default_border_corner_radius(),
             adaptive_corner_radius: true,
             hidpi: true,

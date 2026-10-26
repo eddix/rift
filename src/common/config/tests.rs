@@ -1015,6 +1015,9 @@ fn border_settings_default_to_the_local_janky_borders_style() {
         enabled: false,
         width: 4.0,
         color: 0xfff3_7021,
+        tiled_color: None,
+        floating_color: None,
+        unmanaged_color: None,
         corner_radius: 10.0,
         adaptive_corner_radius: true,
         hidpi: true,
@@ -1033,6 +1036,24 @@ fn border_settings_validation_rejects_invalid_geometry() {
     assert_eq!(settings.validate().len(), 2);
 }
 
+
+#[test]
+fn border_settings_preserve_window_type_colors_in_a_toml_round_trip() {
+    let settings: BorderSettings = toml::from_str(
+        "tiled_color = 0xff7d9c65\nfloating_color = 0xff81a1c1\nunmanaged_color = 0xffebcb8b",
+    )
+    .unwrap();
+    let restored: BorderSettings = toml::from_str(&toml::to_string(&settings).unwrap()).unwrap();
+
+    assert_eq!(
+        (
+            restored.tiled_color,
+            restored.floating_color,
+            restored.unmanaged_color
+        ),
+        (Some(0xff7d_9c65), Some(0xff81_a1c1), Some(0xffeb_cb8b))
+    );
+}
 
 #[test]
 fn border_settings_can_disable_adaptive_corner_radius() {

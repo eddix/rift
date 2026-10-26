@@ -7,7 +7,7 @@ use objc2_quartz_core::CALayer;
 use tracing::warn;
 
 use crate::common::config::BorderSettings;
-use crate::model::projection::BorderTarget;
+use crate::model::projection::{BorderTarget, BorderWindowKind};
 use crate::sys::cgs_window::{CgsWindow, CgsWindowError, CgsWindowMotionHandle};
 use crate::sys::screen::SpaceId;
 use crate::sys::skylight::SLSWindowTags;
@@ -26,6 +26,12 @@ impl BorderStyle {
     fn resolution(self) -> f64 { if self.hidpi { 2.0 } else { 1.0 } }
 
     pub fn for_target(settings: BorderSettings, target: BorderTarget) -> Self {
+        let color = match target.kind {
+            BorderWindowKind::Tiled => settings.tiled_color,
+            BorderWindowKind::Floating => settings.floating_color,
+            BorderWindowKind::Unmanaged => settings.unmanaged_color,
+        }
+        .unwrap_or(settings.color);
         let corner_radius = if settings.adaptive_corner_radius {
             target.corner_radius.unwrap_or(settings.corner_radius)
         } else {
@@ -33,7 +39,7 @@ impl BorderStyle {
         };
         Self {
             width: settings.width,
-            color: settings.color,
+            color,
             corner_radius,
             hidpi: settings.hidpi,
         }
@@ -231,6 +237,7 @@ mod tests {
     fn target_with_corner_radius(corner_radius: Option<f64>) -> BorderTarget {
         BorderTarget {
             window: WindowId::new(1, 1),
+            kind: BorderWindowKind::Tiled,
             window_server_id: WindowServerId::new(1),
             space: SpaceId::new(1),
             frame: CGRect::new(CGPoint::ZERO, CGSize::new(800.0, 600.0)),
@@ -306,5 +313,50 @@ mod tests {
         let style = BorderStyle::for_target(settings, target_with_corner_radius(Some(13.0)));
 
         assert_eq!(style.corner_radius, 14.0);
+    }
+
+    #[test]
+    fn border_style_selects_the_color_for_each_window_type() {
+        let settings = BorderSettings {
+            color: 0xff00_0000,
+            tiled_color: Some(0xff7d_9c65),
+            floating_color: Some(0xff81_a1c1),
+            unmanaged_color: Some(0xffeb_cb8b),
+            ..BorderSettings::default()
+        };
+        let colors = [
+            BorderWindowKind::Tiled,
+            BorderWindowKind::Floating,
+            BorderWindowKind::Unmanaged,
+        ]
+        .map(|kind| {
+            let target = BorderTarget {
+                kind,
+                ..target_with_corner_radius(None)
+            };
+            BorderStyle::for_target(settings, target).color
+        });
+
+        assert_eq!(colors, [0xff7d_9c65, 0xff81_a1c1, 0xffeb_cb8b]);
+    }
+
+    #[test]
+    fn border_style_keeps_the_legacy_color_for_types_without_an_override() {
+        let settings: BorderSettings =
+            toml::from_str("color = 0xff123456\nfloating_color = 0").unwrap();
+        let colors = [
+            BorderWindowKind::Tiled,
+            BorderWindowKind::Floating,
+            BorderWindowKind::Unmanaged,
+        ]
+        .map(|kind| {
+            let target = BorderTarget {
+                kind,
+                ..target_with_corner_radius(None)
+            };
+            BorderStyle::for_target(settings, target).color
+        });
+
+        assert_eq!(colors, [0xff12_3456, 0, 0xff12_3456]);
     }
 }

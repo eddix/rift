@@ -362,11 +362,13 @@ mod tests {
 
     use super::*;
     use crate::actor::app::WindowId;
+    use crate::model::projection::BorderWindowKind;
     use crate::sys::screen::SpaceId;
 
     fn target(window_server_id: u32, frame: CGRect) -> BorderTarget {
         BorderTarget {
             window: WindowId::new(1, 1),
+            kind: BorderWindowKind::Tiled,
             window_server_id: WindowServerId::new(window_server_id),
             space: SpaceId::new(1),
             frame,

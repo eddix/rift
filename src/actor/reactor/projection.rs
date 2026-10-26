@@ -1,7 +1,7 @@
 use crate::actor::reactor::Reactor;
 use crate::actor::{border, command_palette};
 use crate::model::projection::{
-    BorderTarget, DesktopState,
+    BorderTarget, BorderWindowKind, DesktopState,
 };
 
 impl Reactor {
@@ -43,6 +43,13 @@ impl Reactor {
 
         let window_server_id = state.info.sys_id?;
         let space = self.best_space_for_window_id(window)?;
+        let kind = if !state.is_admitted() {
+            BorderWindowKind::Unmanaged
+        } else if self.layout_manager.layout_engine.is_window_floating(window) {
+            BorderWindowKind::Floating
+        } else {
+            BorderWindowKind::Tiled
+        };
         let corner_radius = self
             .state
             .windows
@@ -50,6 +57,7 @@ impl Reactor {
             .and_then(|info| info.corner_radius);
         self.state.windows.is_window_visible(window_server_id).then_some(BorderTarget {
             window,
+            kind,
             window_server_id,
             space,
             frame: state.frame_monotonic,

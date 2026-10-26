@@ -41,10 +41,19 @@ pub struct DisplayWorkspaceContext {
     pub workspaces: Vec<RuntimeWorkspaceData>,
 }
 
-/// Focused window geometry needed by the border renderer.
+/// Mutually exclusive window types used by the border renderer.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum BorderWindowKind {
+    Tiled,
+    Floating,
+    Unmanaged,
+}
+
+/// Focused window state needed by the border renderer.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct BorderTarget {
     pub window: WindowId,
+    pub kind: BorderWindowKind,
     pub window_server_id: WindowServerId,
     pub space: SpaceId,
     pub frame: CGRect,

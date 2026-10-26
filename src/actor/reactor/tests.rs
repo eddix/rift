@@ -1892,6 +1892,84 @@ fn focus_change_publishes_one_committed_desktop_snapshot() {
 }
 
 #[test]
+fn focused_border_tracks_tiled_and_floating_transitions_without_a_focus_change() {
+    use crate::model::projection::BorderWindowKind;
+
+    let (mut reactor, window, _, space, _, _) = reactor_with_window_on_space1();
+    reactor.send_layout_event(LayoutEvent::WindowAdded(space, window));
+    reactor.handle_event(Event::WindowServerFocusChanged(window, space));
+    let target = |reactor: &Reactor| {
+        reactor
+            .presentation_manager
+            .projections
+            .current()
+            .unwrap()
+            .state
+            .border_target
+            .unwrap()
+    };
+    let tiled = target(&reactor);
+    reactor.handle_test_layout_command(LayoutCommand::ToggleWindowFloating);
+    let floating = target(&reactor);
+    reactor.handle_test_layout_command(LayoutCommand::ToggleWindowFloating);
+    let tiled_again = target(&reactor);
+
+    assert_eq!(
+        [tiled, floating, tiled_again].map(|target| (target.window, target.kind)),
+        [
+            (window, BorderWindowKind::Tiled),
+            (window, BorderWindowKind::Floating),
+            (window, BorderWindowKind::Tiled),
+        ]
+    );
+}
+
+#[test]
+fn focused_border_classifies_windows_excluded_by_an_app_rule_as_unmanaged() {
+    use crate::model::projection::BorderWindowKind;
+
+    let (mut reactor, window, _, space, _, _) = reactor_with_window_on_space1();
+    make_window_explicitly_unmanaged(&mut reactor, window);
+    reactor.handle_event(Event::WindowServerFocusChanged(window, space));
+    let target = reactor
+        .presentation_manager
+        .projections
+        .current()
+        .unwrap()
+        .state
+        .border_target
+        .unwrap();
+
+    assert_eq!(
+        (target.window, target.kind),
+        (window, BorderWindowKind::Unmanaged)
+    );
+}
+
+#[test]
+fn focused_border_classifies_floating_layout_windows_as_floating() {
+    use crate::model::projection::BorderWindowKind;
+
+    let (mut reactor, window, _, space, _, _) = reactor_with_window_on_space1();
+    reactor.send_layout_event(LayoutEvent::WindowAdded(space, window));
+    reactor.handle_event(Event::WindowServerFocusChanged(window, space));
+    reactor.handle_test_layout_command(LayoutCommand::SetWorkspaceLayout {
+        workspace: None,
+        mode: LayoutMode::Floating,
+    });
+    let target = reactor
+        .presentation_manager
+        .projections
+        .current()
+        .unwrap()
+        .state
+        .border_target
+        .unwrap();
+
+    assert_eq!(target.kind, BorderWindowKind::Floating);
+}
+
+#[test]
 fn passive_command_space_change_does_not_override_clicked_window_focus() {
     let (mut apps, mut reactor) = test_context();
     let (raise_manager_tx, mut raise_manager_rx) = actor::channel();

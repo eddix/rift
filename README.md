@@ -84,6 +84,20 @@ needs Accessibility permission. Display rules use `built_in` and
 `external_primary`, without machine-specific display UUIDs; workspace 5 remains
 an independent scratch workspace on each display.
 
+The focused-window border uses a separate color for each window type:
+
+```toml
+[settings.ui.border]
+color = 0xff7D9C65
+tiled_color = 0xff7D9C65
+floating_color = 0xff81A1C1
+unmanaged_color = 0xffEBCB8B
+```
+
+Colors use ARGB values. Each omitted type uses `color` as its fallback. Changes
+apply through config hot reload. Toggling a window between tiled and floating
+states also updates its border color.
+
 ## community
 
 Join [#rift:matrix.org](https://matrix.to/#/#rift:matrix.org) for discussion, support, and development.

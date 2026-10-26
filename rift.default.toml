@@ -234,6 +234,10 @@ enabled = false
 width = 4.0
 # ARGB color; this default matches the orange used by the local JankyBorders setup
 color = 0xfff37021
+# Optional colors by window type. Omit a setting to use color above.
+# tiled_color = 0xff7d9c65
+# floating_color = 0xff81a1c1
+# unmanaged_color = 0xffebcb8b
 # rounded corner radius in logical points
 corner_radius = 10.0
 # render using a 2x backing scale
