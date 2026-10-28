@@ -34,6 +34,56 @@ impl History {
         self.by_display.retain(|_, windows| !windows.is_empty());
     }
 
+    pub(crate) fn retain(&mut self, mut exists: impl FnMut(WindowId) -> bool) {
+        for windows in self.by_display.values_mut() {
+            windows.retain(|window| exists(*window));
+        }
+        self.by_display.retain(|_, windows| !windows.is_empty());
+    }
+
+    pub(crate) fn most_recent(&self, display: &str, candidates: &[WindowId]) -> Option<WindowId> {
+        self.by_display
+            .get(display)?
+            .iter()
+            .copied()
+            .find(|window| candidates.contains(window))
+    }
+
+    /// Keep history for other workspaces while selecting only eligible windows.
+    pub(crate) fn target_in_scope(
+        &mut self,
+        display: &str,
+        candidates: &[WindowId],
+        current: Option<WindowId>,
+        action: Action,
+    ) -> Option<WindowId> {
+        let history = self.by_display.entry(display.to_owned()).or_default();
+        for &candidate in candidates {
+            if !history.contains(&candidate) {
+                history.push(candidate);
+            }
+        }
+        let mut eligible: Vec<_> =
+            history.iter().copied().filter(|window| candidates.contains(window)).collect();
+        if eligible.is_empty() {
+            return None;
+        }
+        if action == Action::Cycle {
+            let next = current
+                .and_then(|window| eligible.iter().position(|candidate| *candidate == window))
+                .map_or(0, |index| (index + 1) % eligible.len());
+            eligible.rotate_left(next);
+            // Rotate only this scope. A focus notification can then promote the
+            // target without making the next cycle jump back to its predecessor.
+            for (slot, window) in
+                history.iter_mut().filter(|window| candidates.contains(window)).zip(&eligible)
+            {
+                *slot = *window;
+            }
+        }
+        eligible.first().copied()
+    }
+
     pub(crate) fn target(
         &mut self,
         display: &str,
@@ -126,5 +176,45 @@ mod tests {
         let target = history.target("display", &[remaining], None, None, Action::Toggle);
 
         assert_eq!(target, Some(remaining));
+    }
+
+    #[test]
+    fn scoped_cycle_visits_every_candidate_with_native_focus_feedback() {
+        let mut history = History::default();
+        let tiled = window(1);
+        let candidates = [window(2), window(3), window(4)];
+        history.record("display", tiled);
+        let mut current = Some(candidates[0]);
+        let selected = std::array::from_fn::<_, 3, _>(|_| {
+            let target = history.target_in_scope("display", &candidates, current, Action::Cycle);
+            history.record("display", target.unwrap());
+            current = target;
+            target
+        });
+
+        assert_eq!(
+            (selected, history.most_recent("display", &[tiled])),
+            (
+                [
+                    Some(candidates[1]),
+                    Some(candidates[2]),
+                    Some(candidates[0])
+                ],
+                Some(tiled)
+            )
+        );
+    }
+
+    #[test]
+    fn scoped_selection_keeps_recency_for_an_inactive_workspace() {
+        let mut history = History::default();
+        let first = window(1);
+        let recent = window(2);
+        let current = window(3);
+        history.record("display", first);
+        history.record("display", recent);
+        history.target_in_scope("display", &[current], None, Action::Toggle);
+
+        assert_eq!(history.most_recent("display", &[first, recent]), Some(recent));
     }
 }

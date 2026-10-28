@@ -181,8 +181,8 @@ app_rules = [
 
 "Alt + Comma" = "prev_window"
 "Alt + Period" = "next_window"
-"Alt + U" = "toggle_focus_unmanaged"
-"Alt + Shift + U" = "cycle_unmanaged_windows"
+"Alt + U" = "toggle_focus_untiled"
+"Alt + Shift + U" = "cycle_untiled_windows"
 "Alt + Ctrl + Comma" = { focus_display = "left" }
 "Alt + Ctrl + Period" = { focus_display = "right" }
 

@@ -98,6 +98,17 @@ Colors use ARGB values. Each omitted type uses `color` as its fallback. Changes
 apply through config hot reload. Toggling a window between tiled and floating
 states also updates its border color.
 
+`Alt+U` switches focus between tiled windows and untiled windows (floating or
+unmanaged). It returns to the most recently focused tiled window. `Alt+Shift+U`
+cycles through untiled windows. Candidates are visible, non-minimized standard
+top-level windows on the active display. Managed windows must belong to its
+active workspace. The commands do not change window management or workspace
+assignments.
+
+The corresponding CLI commands are `rift-cli execute window toggle-focus-untiled`
+and `rift-cli execute window cycle-untiled`. The legacy unmanaged-only commands
+remain available.
+
 ## community
 
 Join [#rift:matrix.org](https://matrix.to/#/#rift:matrix.org) for discussion, support, and development.
