@@ -119,6 +119,8 @@ pub enum ReactorCommand {
     },
     ToggleFocusUnmanaged,
     CycleUnmanagedWindows,
+    ToggleFocusUntiled,
+    CycleUntiledWindows,
     ResetAllWorkspaces,
     ShowMissionControlAll,
     ShowMissionControlCurrent,

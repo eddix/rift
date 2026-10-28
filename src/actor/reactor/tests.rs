@@ -11804,3 +11804,258 @@ fn unmanaged_window_server_focus_does_not_enter_the_layout_engine() {
 
     assert!(outcome.layout_events.is_empty());
 }
+
+struct UntiledFocusFixture {
+    reactor: Reactor,
+    space: SpaceId,
+    other_space: SpaceId,
+    tiled: WindowId,
+    floating: WindowId,
+    floating_server: WindowServerId,
+    unmanaged: WindowId,
+    unmanaged_server: WindowServerId,
+}
+
+impl UntiledFocusFixture {
+    fn new() -> Self {
+        let (mut reactor, tiled, tiled_server, space, other_space, frame, _) =
+            reactor_with_window_on_space1_two_displays();
+        reactor.send_layout_event(LayoutEvent::WindowAdded(space, tiled));
+        let floating = WindowId::new(2, 1);
+        let floating_server = WindowServerId::new(202);
+        reactor.add_test_app(floating.pid);
+        reactor.add_test_window(floating, floating_server, Some(space), frame);
+        let workspace = reactor.test_workspace(space, 0);
+        assert!(reactor.assign_test_window_to_workspace(space, floating, workspace));
+        reactor.send_layout_event(LayoutEvent::WindowAdded(space, floating));
+        reactor.send_layout_event(LayoutEvent::WindowFocused(space, floating));
+        reactor.handle_test_layout_command(LayoutCommand::ToggleWindowFloating);
+        assert!(reactor.layout_manager.layout_engine.is_window_floating(floating));
+
+        let unmanaged = WindowId::new(3, 1);
+        let unmanaged_server = WindowServerId::new(303);
+        reactor.add_test_app(unmanaged.pid);
+        reactor.add_test_window(unmanaged, unmanaged_server, Some(space), frame);
+        make_window_explicitly_unmanaged(&mut reactor, unmanaged);
+        crate::sys::window_server::set_space_window_list_for_space_override(
+            space.get(),
+            Some(vec![
+                tiled_server.as_u32(),
+                floating_server.as_u32(),
+                unmanaged_server.as_u32(),
+            ]),
+        );
+        crate::sys::window_server::set_space_window_list_for_space_override(
+            other_space.get(),
+            Some(vec![]),
+        );
+        reactor.handle_event(Event::WindowServerFocusChanged(tiled, space));
+        Self {
+            reactor,
+            space,
+            other_space,
+            tiled,
+            floating,
+            floating_server,
+            unmanaged,
+            unmanaged_server,
+        }
+    }
+
+    fn focus(&mut self, window: WindowId) {
+        self.reactor.handle_event(Event::WindowServerFocusChanged(window, self.space));
+    }
+
+    fn requested_focus(&mut self, command: ReactorCommand) -> Option<WindowId> {
+        let outcome = self
+            .reactor
+            .dispatch_workflow(Event::Command(Command::Reactor(command)))
+            .unwrap();
+        assert!(outcome.layout_events.is_empty());
+        assert!(outcome.pre_layout_window_frame_writes.is_empty());
+        outcome.layout_responses.first().and_then(|(response, space)| {
+            assert!(!response.changed);
+            assert!(space.is_none());
+            response.focus_window
+        })
+    }
+}
+
+impl Drop for UntiledFocusFixture {
+    fn drop(&mut self) {
+        for space in [self.space, self.other_space] {
+            crate::sys::window_server::set_space_window_list_for_space_override(space.get(), None);
+        }
+    }
+}
+
+#[test]
+fn untiled_toggle_uses_mru_across_both_types_and_returns_to_tiled() {
+    for floating_is_recent in [false, true] {
+        let mut f = UntiledFocusFixture::new();
+        let (older, recent) = if floating_is_recent {
+            (f.unmanaged, f.floating)
+        } else {
+            (f.floating, f.unmanaged)
+        };
+        f.focus(older);
+        f.focus(recent);
+        f.focus(f.tiled);
+        let there = f.requested_focus(ReactorCommand::ToggleFocusUntiled);
+        f.focus(there.unwrap());
+        // A legacy workspace focus record can name a floating window.
+        let workspace = f.reactor.test_workspace(f.space, 0);
+        f.reactor.layout_manager.layout_engine.workspaces_mut().set_last_focused_window(
+            f.space,
+            workspace,
+            Some(f.floating),
+        );
+        let back = f.requested_focus(ReactorCommand::ToggleFocusUntiled);
+
+        assert_eq!((there, back), (Some(recent), Some(f.tiled)));
+    }
+}
+
+#[test]
+fn untiled_cycle_alternates_floating_and_unmanaged_with_native_focus_feedback() {
+    let mut f = UntiledFocusFixture::new();
+    f.focus(f.floating);
+    let selected = std::array::from_fn::<_, 3, _>(|_| {
+        let target = f.requested_focus(ReactorCommand::CycleUntiledWindows);
+        f.focus(target.unwrap());
+        target
+    });
+
+    assert_eq!(selected, [
+        Some(f.unmanaged),
+        Some(f.floating),
+        Some(f.unmanaged)
+    ]);
+}
+
+#[test]
+fn untiled_focus_excludes_ineligible_floating_windows() {
+    for case in [
+        "inactive workspace",
+        "other display",
+        "minimized",
+        "hidden",
+        "popup",
+        "child",
+        "closed",
+    ] {
+        let mut f = UntiledFocusFixture::new();
+        f.focus(f.unmanaged);
+        f.focus(f.floating);
+        f.focus(f.tiled);
+        match case {
+            "inactive workspace" => {
+                let workspace = f.reactor.test_workspace(f.space, 1);
+                assert!(f.reactor.assign_test_window_to_workspace(f.space, f.floating, workspace));
+            }
+            "other display" => {
+                f.reactor
+                    .state
+                    .windows
+                    .set_window_server_space(f.floating_server, Some(f.other_space));
+            }
+            "minimized" => {
+                f.reactor.state.windows.window_mut(f.floating).unwrap().info.is_minimized = true
+            }
+            "hidden" => {
+                f.reactor.state.windows.mark_window_hidden(f.floating_server);
+            }
+            "popup" => {
+                f.reactor.state.windows.window_mut(f.floating).unwrap().info.is_standard = false
+            }
+            "child" => f.reactor.state.windows.window_mut(f.floating).unwrap().info.is_root = false,
+            "closed" => {
+                f.reactor.state.windows.remove_window(f.floating);
+            }
+            _ => unreachable!(),
+        }
+
+        assert_eq!(
+            f.requested_focus(ReactorCommand::ToggleFocusUntiled),
+            Some(f.unmanaged),
+            "{case}"
+        );
+    }
+}
+
+#[test]
+fn untiled_focus_includes_standard_windows_excluded_by_heuristics() {
+    let mut f = UntiledFocusFixture::new();
+    let window = f.reactor.state.windows.window_mut(f.unmanaged).unwrap();
+    window.manage_override = None;
+    window.is_manageable = false;
+    f.focus(f.unmanaged);
+    f.focus(f.tiled);
+
+    assert_eq!(
+        f.requested_focus(ReactorCommand::ToggleFocusUntiled),
+        Some(f.unmanaged)
+    );
+}
+
+#[test]
+fn untiled_focus_without_an_eligible_target_is_a_no_op() {
+    let mut f = UntiledFocusFixture::new();
+    f.reactor.state.windows.mark_window_hidden(f.floating_server);
+    f.reactor.state.windows.mark_window_hidden(f.unmanaged_server);
+
+    assert_eq!(
+        (
+            f.requested_focus(ReactorCommand::ToggleFocusUntiled),
+            f.requested_focus(ReactorCommand::CycleUntiledWindows)
+        ),
+        (None, None)
+    );
+}
+
+#[test]
+fn untiled_focus_enters_the_command_display_when_native_focus_is_still_on_another_display() {
+    let mut f = UntiledFocusFixture::new();
+    let window = WindowId::new(4, 1);
+    let server = WindowServerId::new(404);
+    let frame = CGRect::new(CGPoint::new(1500., 100.), CGSize::new(800., 600.));
+    f.reactor.add_test_app(window.pid);
+    f.reactor.add_test_window(window, server, Some(f.other_space), frame);
+    make_window_explicitly_unmanaged(&mut f.reactor, window);
+    crate::sys::window_server::set_space_window_list_for_space_override(
+        f.other_space.get(),
+        Some(vec![server.as_u32()]),
+    );
+    f.focus(f.floating);
+    f.reactor.handle_event(Event::ActiveDisplayChanged {
+        menu_bar_space: Some(f.other_space),
+        command_space: Some(f.other_space),
+    });
+
+    assert_eq!(
+        f.requested_focus(ReactorCommand::ToggleFocusUntiled),
+        Some(window)
+    );
+}
+
+#[test]
+fn untiled_toggle_without_a_tiled_target_does_not_select_another_untiled_window() {
+    let mut f = UntiledFocusFixture::new();
+    make_window_explicitly_unmanaged(&mut f.reactor, f.tiled);
+    f.focus(f.floating);
+
+    assert_eq!(f.requested_focus(ReactorCommand::ToggleFocusUntiled), None);
+}
+
+#[test]
+fn legacy_unmanaged_focus_still_excludes_floating_windows() {
+    let mut f = UntiledFocusFixture::new();
+    f.focus(f.floating);
+    f.focus(f.tiled);
+
+    assert_eq!(
+        f.requested_focus(ReactorCommand::ToggleFocusUnmanaged),
+        Some(f.unmanaged)
+    );
+}
+

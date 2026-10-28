@@ -8,6 +8,7 @@ mod animation;
 mod events;
 mod gesture;
 pub(crate) use crate::layout_engine::WorkspaceDropRequest as OverviewDrop;
+mod focus_history;
 mod main_window;
 mod managers;
 mod native_tabs;
@@ -15,7 +16,6 @@ mod projection;
 mod query;
 mod replay;
 pub mod transaction_manager;
-mod unmanaged_focus;
 mod utils;
 
 #[cfg(test)]
@@ -449,7 +449,8 @@ pub struct Reactor {
     refocus_manager: managers::RefocusManager,
     suppress_auto_workspace_switch_until_input: bool,
     pending_space_change_manager: managers::PendingSpaceChangeManager,
-    unmanaged_focus_history: unmanaged_focus::History,
+    unmanaged_focus_history: focus_history::History,
+    window_focus_history: focus_history::History,
     active_spaces: HashSet<SpaceId>,
     startup_ready: Option<oneshot::Sender<()>>,
     pub animation_tx: Option<AnimationSender>,
@@ -597,7 +598,8 @@ impl Reactor {
             },
             spaces_tx: None,
             topology_guard: Default::default(),
-            unmanaged_focus_history: unmanaged_focus::History::default(),
+            unmanaged_focus_history: focus_history::History::default(),
+            window_focus_history: focus_history::History::default(),
             active_spaces: HashSet::default(),
             startup_ready: None,
             animation_tx: None,
@@ -1538,6 +1540,7 @@ impl Reactor {
         let raised_window = self.main_window_tracker.handle_event(&event);
         if let Event::WindowServerFocusChanged(window, space) = &event {
             self.remember_unmanaged_focus(*window, *space);
+            self.remember_window_focus(*window, *space);
         }
         match event {
             Event::ApplicationLaunched {
@@ -1579,11 +1582,13 @@ impl Reactor {
             }
             Event::ApplicationTerminated(pid) => {
                 self.unmanaged_focus_history.remove_app(pid);
+                self.window_focus_history.remove_app(pid);
                 return application_workflow::handle_application_terminated(pid);
             }
             Event::ApplicationThreadTerminated(pid) => {
                 self.forget_window_inventory(pid);
                 self.unmanaged_focus_history.remove_app(pid);
+                self.window_focus_history.remove_app(pid);
                 self.clear_menu_state_for_pid(pid);
                 return application_workflow::handle_application_thread_terminated(
                     &mut self.state,
@@ -1756,6 +1761,7 @@ impl Reactor {
             }
             Event::WindowDestroyed(wid) => {
                 self.unmanaged_focus_history.remove_window(wid);
+                self.window_focus_history.remove_window(wid);
                 // macOS can replace AXUIElements during lifecycle/display churn while the
                 // native window remains alive. Recovery already schedules a stable refresh,
                 // so preserve topology until then. Outside churn, retain the original AX
@@ -2580,10 +2586,16 @@ impl Reactor {
                 }
             }
             Event::Command(Command::Reactor(ReactorCommand::ToggleFocusUnmanaged)) => {
-                return Ok(self.handle_unmanaged_focus_command(unmanaged_focus::Action::Toggle));
+                return Ok(self.handle_unmanaged_focus_command(focus_history::Action::Toggle));
             }
             Event::Command(Command::Reactor(ReactorCommand::CycleUnmanagedWindows)) => {
-                return Ok(self.handle_unmanaged_focus_command(unmanaged_focus::Action::Cycle));
+                return Ok(self.handle_unmanaged_focus_command(focus_history::Action::Cycle));
+            }
+            Event::Command(Command::Reactor(ReactorCommand::ToggleFocusUntiled)) => {
+                return Ok(self.handle_untiled_focus_command(focus_history::Action::Toggle));
+            }
+            Event::Command(Command::Reactor(ReactorCommand::CycleUntiledWindows)) => {
+                return Ok(self.handle_untiled_focus_command(focus_history::Action::Cycle));
             }
             Event::Command(Command::Reactor(ReactorCommand::ShowMissionControlAll)) => {
                 return command_workflow::handle_wm_command(
@@ -6076,6 +6088,107 @@ impl Reactor {
         Some(wid)
     }
 
+    fn remember_window_focus(&mut self, window_id: WindowId, space: SpaceId) {
+        let Some(window) = self.state.windows.window(window_id) else {
+            return;
+        };
+        if !window.info.is_standard || !window.info.is_root || window.info.is_minimized {
+            return;
+        }
+        let Some(display) = self
+            .space_state
+            .screen_by_space(space)
+            .and_then(ScreenInfo::display_uuid_opt)
+            .map(str::to_owned)
+        else {
+            return;
+        };
+        self.window_focus_history.record(&display, window_id);
+    }
+
+    fn window_focus_groups_in_space(&self, space: SpaceId) -> (Vec<WindowId>, Vec<WindowId>) {
+        let engine = &self.layout_manager.layout_engine;
+        let active_workspace = engine.workspaces().active_workspace(space);
+        let mut tiled = Vec::new();
+        let mut untiled = Vec::new();
+        let mut seen = HashSet::default();
+        for server_id in window_server::space_window_list_for_connection(&[space.get()], 0, false) {
+            let server_id = WindowServerId::new(server_id);
+            let Some(window_id) = self.state.windows.tracked_window_id(server_id) else {
+                continue;
+            };
+            let Some(window) = self.state.windows.window(window_id) else {
+                continue;
+            };
+            if !window.info.is_standard
+                || !window.info.is_root
+                || window.info.is_minimized
+                || !self.state.windows.is_window_visible(server_id)
+                || self
+                    .state
+                    .windows
+                    .window_server_space(server_id)
+                    .is_some_and(|native| native != space)
+                || !seen.insert(window_id)
+            {
+                continue;
+            }
+            if !window.is_admitted() {
+                untiled.push(window_id);
+            } else if active_workspace.is_some()
+                && self.state.windows.workspace_for_window(space, window_id) == active_workspace
+            {
+                if engine.is_window_floating(window_id) {
+                    untiled.push(window_id);
+                } else {
+                    tiled.push(window_id);
+                }
+            }
+        }
+        (tiled, untiled)
+    }
+
+    fn handle_untiled_focus_command(&mut self, action: focus_history::Action) -> EventOutcome {
+        let Some(space) = self.active_display_space() else {
+            return EventOutcome::no_change();
+        };
+        let Some(display) = self
+            .space_state
+            .screen_by_space(space)
+            .and_then(ScreenInfo::display_uuid_opt)
+            .map(str::to_owned)
+        else {
+            return EventOutcome::no_change();
+        };
+        let (tiled, untiled) = self.window_focus_groups_in_space(space);
+        self.window_focus_history
+            .retain(|window| self.state.windows.contains_window(window));
+        let current = self.main_window();
+        let current_is_untiled = current.is_some_and(|window| untiled.contains(&window));
+        let target = if action == focus_history::Action::Toggle && current_is_untiled {
+            self.window_focus_history
+                .most_recent(&display, &tiled)
+                .or_else(|| {
+                    self.last_focused_window_in_space(space).filter(|wid| tiled.contains(wid))
+                })
+                .or_else(|| tiled.first().copied())
+        } else {
+            self.window_focus_history.target_in_scope(&display, &untiled, current, action)
+        };
+        let Some(target) = target.filter(|target| Some(*target) != current) else {
+            return EventOutcome::no_change();
+        };
+        EventOutcome::no_change().with_layout_response(
+            layout::EventResponse {
+                changed: false,
+                raise_windows: Vec::new(),
+                focus_window: Some(target),
+                boundary_hit: None,
+            },
+            None,
+        )
+    }
+
     fn explicitly_unmanaged_windows_in_space(&self, space: SpaceId) -> Vec<WindowId> {
         let mut seen = HashSet::default();
         window_server::space_window_list_for_connection(&[space.get()], 0, false)
@@ -6114,7 +6227,7 @@ impl Reactor {
         self.unmanaged_focus_history.record(&display, window_id);
     }
 
-    fn handle_unmanaged_focus_command(&mut self, action: unmanaged_focus::Action) -> EventOutcome {
+    fn handle_unmanaged_focus_command(&mut self, action: focus_history::Action) -> EventOutcome {
         let Some(space) = self.active_display_space() else {
             return EventOutcome::no_change();
         };

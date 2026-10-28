@@ -217,6 +217,10 @@ enum WindowCommands {
     ToggleFocusUnmanaged,
     /// Focus the next unmanaged window on the active display
     CycleUnmanaged,
+    /// Toggle focus between tiled and floating/unmanaged windows on the active display
+    ToggleFocusUntiled,
+    /// Focus the next visible floating/unmanaged window on the active display
+    CycleUntiled,
     /// Toggle fullscreen mode (fills the whole screen, ignores outer gaps)
     ToggleFullscreen,
     /// Toggle fullscreen within configured outer gaps (respects outer gaps / fills tiling area)
@@ -864,6 +868,12 @@ fn map_window_command(cmd: WindowCommands) -> Result<CliCommand, String> {
         WindowCommands::CycleUnmanaged => Ok(CliCommand::Reactor(reactor::Command::Reactor(
             reactor::ReactorCommand::CycleUnmanagedWindows,
         ))),
+        WindowCommands::ToggleFocusUntiled => Ok(CliCommand::Reactor(reactor::Command::Reactor(
+            reactor::ReactorCommand::ToggleFocusUntiled,
+        ))),
+        WindowCommands::CycleUntiled => Ok(CliCommand::Reactor(reactor::Command::Reactor(
+            reactor::ReactorCommand::CycleUntiledWindows,
+        ))),
         WindowCommands::ToggleFullscreen => Ok(CliCommand::Reactor(reactor::Command::Layout(
             LC::ToggleFullscreen,
         ))),
@@ -1349,6 +1359,27 @@ mod tests {
                 "execute_command": { "command": { "reactor": "toggle_command_palette" } }
             })
         );
+    }
+
+    #[test]
+    fn untiled_focus_cli_parses_into_typed_reactor_commands() {
+        for (name, wire_command) in [
+            ("toggle-focus-untiled", "toggle_focus_untiled"),
+            ("cycle-untiled", "cycle_untiled_windows"),
+        ] {
+            let cli = Cli::try_parse_from(["rift-cli", "execute", "window", name]).unwrap();
+            let Commands::Execute { command } = cli.command else {
+                panic!("expected execute command");
+            };
+            let request = build_execute_request(command).unwrap();
+
+            assert_eq!(
+                serde_json::to_value(request).unwrap(),
+                serde_json::json!({
+                    "execute_command": { "command": { "reactor": wire_command } }
+                })
+            );
+        }
     }
 
     #[test]

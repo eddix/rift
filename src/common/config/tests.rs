@@ -289,6 +289,30 @@ fn menu_bar_layout_folder_defaults_and_expands_home() {
 }
 
 #[test]
+fn untiled_focus_commands_parse_from_key_bindings() {
+    #[derive(Deserialize)]
+    struct TestConfig {
+        keys: HashMap<String, WmCommand>,
+    }
+    let config: TestConfig = toml::from_str(
+        "[keys]\ntoggle = \"toggle_focus_untiled\"\ncycle = \"cycle_untiled_windows\"",
+    )
+    .unwrap();
+
+    assert_eq!(
+        (&config.keys["toggle"], &config.keys["cycle"]),
+        (
+            &WmCommand::ReactorCommand(reactor::Command::Reactor(
+                reactor::ReactorCommand::ToggleFocusUntiled
+            )),
+            &WmCommand::ReactorCommand(reactor::Command::Reactor(
+                reactor::ReactorCommand::CycleUntiledWindows
+            )),
+        )
+    );
+}
+
+#[test]
 fn menu_bar_layout_folder_preserves_absolute_paths() {
     let settings: MenuBarSettings =
         toml::from_str("layout_folder = \"/tmp/rift-layouts\"").unwrap();
