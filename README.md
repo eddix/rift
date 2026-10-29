@@ -119,7 +119,8 @@ Shortcut changes apply through config hot reload.
 
 `Alt+O` toggles Rift Overview. Window previews require Screen Recording
 permission; after granting it in macOS, open Overview again. Enabling Overview
-requires restarting Rift.
+requires restarting Rift. If the shortcut still does nothing after granting
+permission, restart Rift once and try again.
 
 ## community
 
