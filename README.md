@@ -117,6 +117,10 @@ shortcuts from other keymaps include the keymap name. Commands with different
 arguments, such as moving a window with or without following it, remain separate.
 Shortcut changes apply through config hot reload.
 
+`Alt+O` toggles Rift Overview. Window previews require Screen Recording
+permission; after granting it in macOS, open Overview again. Enabling Overview
+requires restarting Rift.
+
 ## community
 
 Join [#rift:matrix.org](https://matrix.to/#/#rift:matrix.org) for discussion, support, and development.
