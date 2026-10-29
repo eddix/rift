@@ -1197,9 +1197,7 @@ fn unmanaged_focus_commands_parse_from_key_bindings() {
             ))
         )
     );
-
 }
-
 
 #[test]
 fn command_palette_toggle_parses_from_key_bindings() {
@@ -1226,7 +1224,6 @@ fn command_palette_toggle_parses_from_key_bindings() {
     );
 }
 
-
 #[test]
 fn border_settings_default_to_the_local_janky_borders_style() {
     let settings: BorderSettings = toml::from_str("").unwrap();
@@ -1244,7 +1241,6 @@ fn border_settings_default_to_the_local_janky_borders_style() {
     });
 }
 
-
 #[test]
 fn border_settings_validation_rejects_invalid_geometry() {
     let settings = BorderSettings {
@@ -1255,7 +1251,6 @@ fn border_settings_validation_rejects_invalid_geometry() {
 
     assert_eq!(settings.validate().len(), 2);
 }
-
 
 #[test]
 fn border_settings_preserve_window_type_colors_in_a_toml_round_trip() {
@@ -1286,7 +1281,6 @@ fn border_settings_can_disable_adaptive_corner_radius() {
     );
 }
 
-
 #[test]
 fn command_palette_settings_default_to_eight_visible_rows() {
     let settings: CommandPaletteSettings = toml::from_str("").unwrap();
@@ -1297,7 +1291,6 @@ fn command_palette_settings_default_to_eight_visible_rows() {
         width: 640.0,
     });
 }
-
 
 #[test]
 fn command_palette_settings_reject_invalid_size_limits() {

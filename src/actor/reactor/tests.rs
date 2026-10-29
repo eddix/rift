@@ -1186,8 +1186,8 @@ fn move_window_to_affinity_display_keeps_resident_window_in_target_workspace() {
     assert_eq!(
         (
             reactor.assigned_space_for_window_id(window),
-            reactor.state.windows.workspace_for_window(external_space, window),
-            reactor.state.windows.workspace_for_window(external_space, resident),
+            reactor.state.windows.workspace_for_window(window),
+            reactor.state.windows.workspace_for_window(resident),
             reactor.assigned_space_for_window_id(resident),
             reactor
                 .layout_manager
@@ -1855,13 +1855,15 @@ fn active_display_update_publishes_destination_workspace_to_menu_bar() {
         command_space: Some(right_space),
     });
     let (_, event) = menu_rx.try_recv().expect("active display should publish a menu update");
-    let menu_bar::Event::Snapshot(snapshot) = event else {
-        panic!("expected desktop snapshot");
+    let menu_bar::Event::Update(update) = event else {
+        panic!("expected menu update");
     };
-    let context = snapshot.state.menu_bar_context.as_ref().expect("menu bar context");
-
+    let display = update.displays.iter().find(|display| display.is_active_context).unwrap();
     assert_eq!(
-        (context.active_space, context.active_workspace_idx),
+        (
+            display.space,
+            display.workspaces.iter().find(|ws| ws.is_active).map(|ws| ws.index)
+        ),
         (right_space, Some(2))
     );
 }
@@ -1879,16 +1881,16 @@ fn focus_change_publishes_one_committed_desktop_snapshot() {
     reactor.handle_events(apps.make_app_with_opts(1, make_windows(2), Some(first), true, true));
     apps.simulate_until_quiet(&mut reactor);
 
-    let (menu_tx, mut menu_rx) = actor::channel();
-    reactor.presentation_manager.menu_tx = Some(menu_tx);
+    let (border_tx, mut border_rx) = actor::channel();
+    reactor.presentation_manager.border_tx = Some(border_tx);
     reactor.handle_event(Event::ApplicationMainWindowChanged(1, Some(second), Quiet::No));
 
-    let (_, event) = menu_rx.try_recv().expect("focus change should publish a snapshot");
-    let menu_bar::Event::Snapshot(snapshot) = event else {
+    let (_, event) = border_rx.try_recv().expect("focus change should publish a snapshot");
+    let crate::actor::border::Event::Snapshot(snapshot) = event else {
         panic!("expected desktop snapshot");
     };
     assert!(
-        menu_rx.try_recv().is_err(),
+        border_rx.try_recv().is_err(),
         "one transaction should publish once"
     );
     assert_eq!(snapshot.state.focused_window, Some(second));
@@ -1897,8 +1899,12 @@ fn focus_change_publishes_one_committed_desktop_snapshot() {
         Some(second)
     );
 
-    let context = snapshot.state.menu_bar_context.as_ref().expect("menu bar context");
-    assert!(context.windows.iter().any(|window| window.id == second && window.is_focused));
+    assert!(
+        reactor
+            .query_windows(Some(space))
+            .iter()
+            .any(|window| window.id == second && window.is_focused)
+    );
 }
 
 #[test]
@@ -2196,58 +2202,47 @@ fn menu_bar_snapshot_groups_visible_displays_and_keeps_command_topology_scoped()
 
     for context in [space1, space2] {
         reactor.space_state.menu_bar_space = Some(context);
-        reactor.presentation_manager.projections.mark_dirty();
-        reactor.publish_desktop_snapshot();
-        let (_, menu_bar::Event::Snapshot(snapshot)) = rx.try_recv().unwrap() else {
+        reactor.presentation_manager.last_projection_signature = None;
+        reactor.maybe_send_menu_update();
+        let (_, menu_bar::Event::Update(update)) = rx.try_recv().unwrap() else {
             panic!("expected menu snapshot")
         };
         assert_eq!(
-            snapshot
-                .state
-                .menu_bar_displays
-                .iter()
-                .map(|display| display.space)
-                .collect::<Vec<_>>(),
+            update.displays.iter().map(|display| display.space).collect::<Vec<_>>(),
             [space1, space2]
         );
         assert_eq!(
-            snapshot.state.menu_bar_displays[0]
-                .workspaces
-                .iter()
-                .position(|ws| ws.is_active),
+            update.displays[0].workspaces.iter().position(|ws| ws.is_active),
             Some(0)
         );
         assert_eq!(
-            snapshot.state.menu_bar_displays[1]
-                .workspaces
-                .iter()
-                .position(|ws| ws.is_active),
+            update.displays[1].workspaces.iter().position(|ws| ws.is_active),
             Some(1)
         );
         let expected = reactor.query_workspaces(Some(context));
-        let projected = snapshot.state.menu_bar_context.as_ref().unwrap();
+        let projected = update.context_workspaces();
         assert_eq!(
-            projected.workspaces.iter().map(|ws| (&ws.id, ws.index)).collect::<Vec<_>>(),
+            projected.iter().map(|ws| (&ws.id, ws.index)).collect::<Vec<_>>(),
             expected.iter().map(|ws| (&ws.id, ws.index)).collect::<Vec<_>>()
         );
     }
 
     reactor.space_state.screens.retain(|screen| screen.space == Some(space1));
-    reactor.presentation_manager.projections.mark_dirty();
-    reactor.publish_desktop_snapshot();
-    let (_, menu_bar::Event::Snapshot(snapshot)) = rx.try_recv().unwrap() else {
+    reactor.presentation_manager.last_projection_signature = None;
+    reactor.maybe_send_menu_update();
+    let (_, menu_bar::Event::Update(update)) = rx.try_recv().unwrap() else {
         panic!("expected menu snapshot")
     };
-    assert_eq!(snapshot.state.menu_bar_displays.len(), 1);
-    assert!(snapshot.state.menu_bar_displays[0].is_active_context);
+    assert_eq!(update.displays.len(), 1);
+    assert!(update.displays[0].is_active_context);
 
     reactor.space_state.screens.clear();
-    reactor.presentation_manager.projections.mark_dirty();
-    reactor.publish_desktop_snapshot();
-    let (_, menu_bar::Event::Snapshot(snapshot)) = rx.try_recv().unwrap() else {
+    reactor.presentation_manager.last_projection_signature = None;
+    reactor.maybe_send_menu_update();
+    let (_, menu_bar::Event::Update(update)) = rx.try_recv().unwrap() else {
         panic!("expected menu snapshot")
     };
-    assert!(snapshot.state.menu_bar_displays.is_empty());
+    assert!(update.displays.is_empty());
 }
 
 #[test]
@@ -2289,10 +2284,10 @@ fn menu_bar_space_falls_back_when_preferred_space_is_not_visible() {
 
 #[test]
 fn snapshot_projection_does_not_initialize_unknown_workspace_topology() {
-    let reactor = test_reactor();
+    let mut reactor = test_reactor();
     let unknown_space = SpaceId::new(99);
 
-    assert!(reactor.snapshot_workspaces(unknown_space).is_empty());
+    assert!(reactor.menu_workspaces(unknown_space).is_empty());
     assert!(
         !reactor
             .layout_manager
@@ -4928,6 +4923,7 @@ fn same_app_native_focus_respects_auto_switch_guards() {
                     SpaceEventKind::User,
                 ));
                 reactor.update_partial_window_server_info(vec![WindowServerInfo {
+                    corner_radius: None,
                     id: wsid,
                     pid: 2,
                     layer: 0,
@@ -6658,7 +6654,6 @@ fn fullscreen_space_in_screen_params_does_not_trigger_topology_relayout() {
     let display_uuid = "11111111-1111-1111-1111-111111111111".to_string();
     let screens_for = |space: SpaceId| -> Vec<ScreenInfo> {
         vec![ScreenInfo {
-            is_builtin: false,
             backing_scale: 1.0,
             id: crate::sys::screen::ScreenId::new(0),
             frame,
@@ -6782,7 +6777,6 @@ fn fullscreen_screen_params_preserves_window_layout() {
     // with the fullscreen space id.
     reactor.space_state.fullscreen_spaces.insert(fullscreen_space);
     reactor.handle_event(space_state_event_from_screens(vec![ScreenInfo {
-        is_builtin: false,
         backing_scale: 1.0,
         id: crate::sys::screen::ScreenId::new(0),
         frame: full_screen,
@@ -8938,7 +8932,7 @@ fn menu_bar_reports_tiled_fullscreen_per_workspace() {
     let space = SpaceId::new(1);
     apps.make_app_and_settle_on_screen(&mut reactor, screen, space, 1, make_windows(2));
     let (tx, mut rx) = crate::actor::channel();
-    reactor.menu_manager.menu_tx = Some(tx);
+    reactor.presentation_manager.menu_tx = Some(tx);
 
     assert!(!menu_fullscreen_flags(&mut reactor, &mut rx)[0]);
 
@@ -8967,7 +8961,7 @@ fn menu_bar_ignores_fullscreen_toggle_on_empty_workspace() {
     let space = SpaceId::new(1);
     apps.make_app_and_settle_on_screen(&mut reactor, screen, space, 1, make_windows(2));
     let (tx, mut rx) = crate::actor::channel();
-    reactor.menu_manager.menu_tx = Some(tx);
+    reactor.presentation_manager.menu_tx = Some(tx);
 
     reactor.handle_test_workspace_command(space, &LayoutCommand::SwitchToWorkspace(1));
     reactor.handle_test_layout_command(LayoutCommand::ToggleFullscreen);
@@ -8979,7 +8973,7 @@ fn menu_bar_ignores_fullscreen_toggle_on_empty_workspace() {
 fn menu_bar_reports_floating_fullscreen() {
     let (mut reactor, _wid, _space, _screen, _frame) = reactor_with_floating_window();
     let (tx, mut rx) = crate::actor::channel();
-    reactor.menu_manager.menu_tx = Some(tx);
+    reactor.presentation_manager.menu_tx = Some(tx);
 
     assert!(!menu_fullscreen_flags(&mut reactor, &mut rx)[0]);
     reactor.handle_test_layout_command(LayoutCommand::ToggleFullscreen);
@@ -13155,7 +13149,6 @@ fn window_added_does_not_assign_an_explicitly_unmanaged_window() {
     assert_eq!(reactor.assigned_space_for_window_id(wid), None);
 }
 
-
 #[test]
 fn cross_display_drag_keeps_an_explicitly_unmanaged_window_unassigned() {
     let (mut reactor, wid, wsid, _space1, space2, initial_frame, screen2) =
@@ -13179,7 +13172,6 @@ fn cross_display_drag_keeps_an_explicitly_unmanaged_window_unassigned() {
     assert_eq!(reactor.state.windows.window_server_space(wsid), Some(space2));
     assert!(!reactor.drag_manager.actor.is_active());
 }
-
 
 #[test]
 fn unmanaged_focus_command_targets_the_mru_window_on_the_active_display() {
@@ -13206,7 +13198,6 @@ fn unmanaged_focus_command_targets_the_mru_window_on_the_active_display() {
     crate::sys::window_server::set_space_window_list_for_space_override(space.get(), None);
     assert_eq!(outcome.layout_responses[0].0.focus_window, Some(unmanaged));
 }
-
 
 #[test]
 fn unmanaged_window_server_focus_does_not_enter_the_layout_engine() {
@@ -13471,4 +13462,3 @@ fn legacy_unmanaged_focus_still_excludes_floating_windows() {
         Some(f.unmanaged)
     );
 }
-

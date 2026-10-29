@@ -11,7 +11,10 @@ use crate::actor::menu_bar;
 use crate::actor::reactor::{Event, Reactor, Sender};
 use crate::common::collections::{HashMap, HashSet};
 use crate::layout_engine::systems::LayoutSystem;
-use crate::model::command_palette::{PaletteAction, PaletteEntry, PaletteEntryId, PaletteEntryKind, PaletteFocusOrigin, PaletteSnapshot};
+use crate::model::command_palette::{
+    PaletteAction, PaletteEntry, PaletteEntryId, PaletteEntryKind, PaletteFocusOrigin,
+    PaletteSnapshot,
+};
 use crate::model::server::{
     RuntimeDisplayData, RuntimeWindowData, RuntimeWorkspaceData, protocol_rect,
 };
@@ -123,7 +126,9 @@ impl ReactorQueryHandle {
         rx.recv().map_err(|_| RecvError)
     }
 
-    pub fn query_command_palette(&self) -> PaletteSnapshot { self.send_query(QueryRequest::CommandPalette).unwrap_or_default() }
+    pub fn query_command_palette(&self) -> PaletteSnapshot {
+        self.send_query(QueryRequest::CommandPalette).unwrap_or_default()
+    }
 
     pub fn query_workspaces(&self, space_id: Option<SpaceId>) -> Vec<RuntimeWorkspaceData> {
         self.send_query(|resp| QueryRequest::Workspaces { space_id, resp })
@@ -266,7 +271,9 @@ impl Reactor {
             QueryRequest::WindowInfo { window_id, resp } => {
                 let _ = resp.send(self.query_window_info(window_id));
             }
-            QueryRequest::CommandPalette(resp) => { let _ = resp.send(self.query_command_palette()); }
+            QueryRequest::CommandPalette(resp) => {
+                let _ = resp.send(self.query_command_palette());
+            }
             QueryRequest::Applications(resp) => {
                 let _ = resp.send(self.query_applications());
             }

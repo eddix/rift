@@ -3,8 +3,7 @@ use std::sync::Arc;
 use objc2_core_foundation::CGRect;
 
 use crate::actor::app::WindowId;
-use crate::model::VirtualWorkspaceId;
-use crate::model::server::{RuntimeDisplayData, RuntimeWindowData, RuntimeWorkspaceData};
+use crate::model::server::RuntimeDisplayData;
 use crate::sys::screen::SpaceId;
 use crate::sys::window_server::WindowServerId;
 
@@ -19,26 +18,6 @@ impl StateRevision {
         let next = self.0.wrapping_add(1);
         Self(if next == 0 { 1 } else { next })
     }
-}
-
-/// Workspace data for the display context currently represented by the menu bar.
-#[derive(Debug, Clone, PartialEq)]
-pub struct WorkspaceContext {
-    pub active_space: SpaceId,
-    pub active_space_is_activated: bool,
-    pub workspaces: Vec<RuntimeWorkspaceData>,
-    pub active_workspace_idx: Option<u64>,
-    pub active_workspace: Option<VirtualWorkspaceId>,
-    pub windows: Vec<RuntimeWindowData>,
-}
-
-/// Workspace projection for one connected display.
-#[derive(Debug, Clone, PartialEq)]
-pub struct DisplayWorkspaceContext {
-    pub display_uuid: String,
-    pub space: SpaceId,
-    pub is_active_context: bool,
-    pub workspaces: Vec<RuntimeWorkspaceData>,
 }
 
 /// Mutually exclusive window types used by the border renderer.
@@ -71,8 +50,6 @@ pub struct DesktopState {
     pub focused_window: Option<WindowId>,
     pub mission_control_active: bool,
     pub border_target: Option<BorderTarget>,
-    pub menu_bar_context: Option<WorkspaceContext>,
-    pub menu_bar_displays: Vec<DisplayWorkspaceContext>,
 }
 
 /// One committed version of [`DesktopState`].
