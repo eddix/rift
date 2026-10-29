@@ -36,6 +36,8 @@ configuration keeps display-local workspaces and leaves Rift Overview disabled.
 No downstream test added since the previous upstream base was dropped. Tests
 which referenced removed menu snapshot types now assert the upstream menu data
 and the retained border snapshot independently.
+Palette metadata has a separate refresh event when a title or workspace change
+leaves border geometry unchanged. A regression test covers that notification.
 
 `named_pin_reload_moves_immediately_without_growing_catalog` fails at the same
 native-move assertion in both the unmodified upstream source archive and the
@@ -44,7 +46,7 @@ rebased fork. The upstream full library run also fails
 the fork retains the earlier fixture correction for that test. The global-pin
 failure is recorded rather than suppressed or given another downstream fix.
 
-The fork's complete library/binary test run has 1,020 passing tests and the one
+The fork's complete library/binary test run has 1,021 passing tests and the one
 global-pin failure above. `cargo clippy --locked --all-targets --all-features
 --no-deps` completes with 308 existing library-test warnings; strict warning-free
 Clippy is not claimed. After copying the current local configuration into its

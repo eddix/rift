@@ -32,6 +32,7 @@ pub enum Event {
     Input(PaletteInput),
     ConfigUpdated(Box<Config>),
     DesktopSnapshot(Arc<DesktopSnapshot>),
+    Refresh,
     Snapshot {
         generation: u64,
         snapshot: PaletteSnapshot,
@@ -129,6 +130,12 @@ impl CommandPalette {
             Event::Input(input) => self.handle_input(input),
             Event::ConfigUpdated(config) => self.update_config(*config),
             Event::DesktopSnapshot(snapshot) => self.handle_desktop_snapshot(snapshot),
+            Event::Refresh => {
+                if let Session::Visible { generation, .. } = self.session {
+                    self.reactor
+                        .send(reactor::Event::CommandPaletteSnapshotRequested { generation });
+                }
+            }
             Event::Snapshot { generation, snapshot } => {
                 self.handle_palette_snapshot(generation, snapshot)
             }

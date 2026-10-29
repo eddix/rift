@@ -17,6 +17,11 @@ impl Reactor {
         };
 
         let Some(snapshot) = self.presentation_manager.projections.publish(state) else {
+            // Window titles and workspace membership are intentionally absent from the
+            // border snapshot. A visible palette still needs their latest metadata.
+            if let Some(palette_tx) = self.presentation_manager.command_palette_tx.as_ref() {
+                palette_tx.send(command_palette::Event::Refresh);
+            }
             return;
         };
         if let Some(border_tx) = self.presentation_manager.border_tx.as_ref() {

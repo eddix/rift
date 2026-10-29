@@ -1940,6 +1940,35 @@ fn focused_border_tracks_tiled_and_floating_transitions_without_a_focus_change()
 }
 
 #[test]
+fn palette_metadata_refreshes_when_the_border_snapshot_is_unchanged() {
+    let (mut reactor, window, _, _, _, _) = reactor_with_window_on_space1();
+    let (tx, mut rx) = actor::channel();
+    reactor.presentation_manager.command_palette_tx = Some(tx);
+    reactor.presentation_manager.projections.mark_dirty();
+    reactor.publish_desktop_snapshot();
+    while rx.try_recv().is_ok() {}
+    let revision = reactor.presentation_manager.projections.current().unwrap().revision;
+
+    reactor.state.windows.window_mut(window).unwrap().info.title = "Renamed document".into();
+    reactor.presentation_manager.projections.mark_dirty();
+    reactor.publish_desktop_snapshot();
+
+    assert_eq!(
+        reactor.presentation_manager.projections.current().unwrap().revision,
+        revision
+    );
+    assert!(matches!(
+        rx.try_recv().unwrap().1,
+        crate::actor::command_palette::Event::Refresh
+    ));
+    let snapshot = reactor.query_command_palette();
+    assert!(snapshot.entries.iter().any(|entry| {
+        entry.id == crate::model::command_palette::PaletteEntryId::Window(window)
+            && entry.primary == "Renamed document"
+    }));
+}
+
+#[test]
 fn focused_border_classifies_windows_excluded_by_an_app_rule_as_unmanaged() {
     use crate::model::projection::BorderWindowKind;
 
