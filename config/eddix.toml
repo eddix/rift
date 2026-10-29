@@ -89,10 +89,11 @@ max_results = 8
 width = 640.0
 
 [settings.ui.mission_control]
-enabled = false
-fade_duration_ms = 0.0
-show_empty_workspaces = false
-window_previews = false
+enabled = true
+fade_duration_ms = 180.0
+fade_enabled = true
+show_empty_workspaces = true
+window_previews = true
 
 [settings.ui.stack_line]
 horiz_placement = "top"
@@ -156,6 +157,7 @@ app_rules = [
 ]
 
 [keys]
+"Alt + O" = "show_mission_control_all"
 "Alt + P" = "toggle_command_palette"
 "Alt + Shift + P" = "toggle_command_palette_commands"
 "Alt + H" = { move_focus = "left" }
