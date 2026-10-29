@@ -69,7 +69,7 @@ window_insertion_point = "end_of_tree"
 enabled = true
 show_empty = false
 mode = "active"
-active_label = "index"
+active_label = "name"
 display_style = "label"
 
 [settings.ui.border]
@@ -96,7 +96,7 @@ preserve_focus_per_workspace = true
 workspace_auto_back_and_forth = false
 prevent_wrapping = false
 default_workspace = 0
-workspace_names = ["1", "2", "3", "4", "5"]
+workspace_names = ["1(IM)", "2(Browser)", "3(Terminal)", "4(Misc)", "5"]
 
 workspace_rules = [
   { workspace = 3, layout = "scrolling" },
