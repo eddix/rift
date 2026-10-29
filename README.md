@@ -109,6 +109,14 @@ The corresponding CLI commands are `rift-cli execute window toggle-focus-untiled
 and `rift-cli execute window cycle-untiled`. The legacy unmanaged-only commands
 remain available.
 
+`Alt+Shift+P` opens the command palette. It includes window navigation, grouping,
+resizing, all six layout modes, master/stack controls, workspace and display
+commands, and every command configured in any keymap. The right column shows
+shortcuts from the current configuration. `Unbound` means no shortcut is assigned;
+shortcuts from other keymaps include the keymap name. Commands with different
+arguments, such as moving a window with or without following it, remain separate.
+Shortcut changes apply through config hot reload.
+
 ## community
 
 Join [#rift:matrix.org](https://matrix.to/#/#rift:matrix.org) for discussion, support, and development.

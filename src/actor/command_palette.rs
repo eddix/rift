@@ -8,11 +8,11 @@ use dispatchr::queue;
 use dispatchr::time::Time;
 use objc2_app_kit::{NSApplicationActivationOptions, NSRunningApplication};
 use objc2_foundation::MainThreadMarker;
-use rift_protocol::{DisplaySelector, LayoutCommand, ReactorCommand, WorkspaceSelector};
+use rift_protocol::ReactorCommand;
 use tracing::{debug, warn};
 
 use super::reactor::{self, Command as ReactorTopCommand};
-use super::wm_controller::{self, WmCmd, WmCommand, WmEvent};
+use super::wm_controller::{self, WmEvent};
 use crate::actor;
 use crate::common::config::{CommandPaletteSettings, Config};
 use crate::model::command_palette::{
@@ -290,6 +290,10 @@ impl CommandPalette {
         if settings.enabled {
             self.ensure_panel();
         }
+        if let Session::Visible { generation, .. } = self.session {
+            self.reactor
+                .send(reactor::Event::CommandPaletteSnapshotRequested { generation });
+        }
     }
 
     fn handle_desktop_snapshot(&mut self, snapshot: Arc<DesktopSnapshot>) {
@@ -353,55 +357,10 @@ impl CommandPalette {
                 };
                 let _ = app.activateWithOptions(NSApplicationActivationOptions::empty());
             }
-            PaletteAction::SwitchWorkspace(index) => {
-                self.send_layout(LayoutCommand::SwitchToWorkspace(index));
-            }
-            PaletteAction::MoveWindowToWorkspace(index) => {
-                self.send_layout(LayoutCommand::MoveWindowToWorkspace {
-                    workspace: WorkspaceSelector::Index(index),
-                    follow: true,
-                    window_id: None,
-                });
-            }
-            PaletteAction::NextWorkspace => self.send_layout(LayoutCommand::NextWorkspace(None)),
-            PaletteAction::PreviousWorkspace => {
-                self.send_layout(LayoutCommand::PrevWorkspace(None));
-            }
-            PaletteAction::LastWorkspace => {
-                self.send_layout(LayoutCommand::SwitchToLastWorkspace);
-            }
-            PaletteAction::ToggleFloating => {
-                self.send_layout(LayoutCommand::ToggleWindowFloating);
-            }
-            PaletteAction::ToggleFullscreen => {
-                self.send_layout(LayoutCommand::ToggleFullscreen);
-            }
-            PaletteAction::ToggleFullscreenWithinGaps => {
-                self.send_layout(LayoutCommand::ToggleFullscreenWithinGaps);
-            }
-            PaletteAction::SetLayout(mode) => {
-                self.send_layout(LayoutCommand::SetWorkspaceLayout { workspace: None, mode });
-            }
-            PaletteAction::FocusDisplay(uuid) => {
-                let _ = self.reactor.try_send(reactor::Event::Command(ReactorTopCommand::Reactor(
-                    ReactorCommand::FocusDisplay(DisplaySelector::Uuid(uuid)),
-                )));
-            }
-            PaletteAction::ResetAllWorkspaces => {
-                let _ = self.reactor.try_send(reactor::Event::Command(ReactorTopCommand::Reactor(
-                    ReactorCommand::ResetAllWorkspaces,
-                )));
-            }
-            PaletteAction::ReloadConfig => {
-                self.wm.send(WmEvent::Command(WmCommand::Wm(WmCmd::ReloadConfig)))
+            PaletteAction::Command(command) => {
+                self.wm.send(WmEvent::Command(command));
             }
         }
-    }
-
-    fn send_layout(&self, command: LayoutCommand) {
-        let _ = self
-            .reactor
-            .try_send(reactor::Event::Command(ReactorTopCommand::Layout(command)));
     }
 }
 
