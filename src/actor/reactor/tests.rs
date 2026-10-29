@@ -367,11 +367,20 @@ fn command_palette_query_exposes_only_leaf_commands() {
     assert!(snapshot.entries.iter().any(|entry| {
         matches!(
             entry.action,
-            crate::model::command_palette::PaletteAction::SwitchWorkspace(1)
+            crate::model::command_palette::PaletteAction::Command(
+                crate::actor::wm_controller::WmCommand::ReactorCommand(Command::Layout(
+                    LayoutCommand::SwitchToWorkspace(1)
+                ))
+            )
         ) && entry.primary.starts_with("Switch Workspace")
     }));
     assert!(snapshot.entries.iter().any(|entry| {
-        entry.action == crate::model::command_palette::PaletteAction::ResetAllWorkspaces
+        entry.action
+            == crate::model::command_palette::PaletteAction::Command(
+                crate::actor::wm_controller::WmCommand::ReactorCommand(Command::Reactor(
+                    ReactorCommand::ResetAllWorkspaces,
+                )),
+            )
             && entry.primary == "Reset All Workspaces"
     }));
 }

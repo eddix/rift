@@ -1,8 +1,9 @@
 //! Pure command-palette state, ranking, and navigation.
 
-use rift_protocol::LayoutMode;
+pub mod commands;
 
 use crate::actor::app::WindowId;
+use crate::actor::wm_controller::WmCommand;
 use crate::common::collections::HashMap;
 use crate::sys::window_server::WindowServerId;
 
@@ -30,28 +31,17 @@ pub enum PaletteMode {
     Commands,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq)]
 pub enum PaletteAction {
     FocusWindow {
         window_id: WindowId,
         window_server_id: Option<WindowServerId>,
     },
     ActivateApplication(i32),
-    SwitchWorkspace(usize),
-    MoveWindowToWorkspace(usize),
-    NextWorkspace,
-    PreviousWorkspace,
-    LastWorkspace,
-    ToggleFloating,
-    ToggleFullscreen,
-    ToggleFullscreenWithinGaps,
-    SetLayout(LayoutMode),
-    FocusDisplay(String),
-    ResetAllWorkspaces,
-    ReloadConfig,
+    Command(WmCommand),
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct PaletteEntry {
     pub id: PaletteEntryId,
     pub kind: PaletteEntryKind,
@@ -472,7 +462,7 @@ mod tests {
             "Rift Command".to_string(),
             ["command".to_string()],
             None,
-            PaletteAction::ReloadConfig,
+            PaletteAction::Command(WmCommand::Wm(crate::actor::wm_controller::WmCmd::ReloadConfig)),
         )
         .hidden_when_empty()
     }
