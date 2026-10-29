@@ -1,8 +1,6 @@
 use crate::actor::reactor::Reactor;
 use crate::actor::{border, command_palette};
-use crate::model::projection::{
-    BorderTarget, BorderWindowKind, DesktopState,
-};
+use crate::model::projection::{BorderTarget, BorderWindowKind, DesktopState};
 
 impl Reactor {
     pub(super) fn publish_desktop_snapshot(&mut self) {
@@ -16,7 +14,6 @@ impl Reactor {
             focused_window: self.main_window(),
             mission_control_active: self.is_mission_control_active(),
             border_target: self.snapshot_border_target(),
-            ..DesktopState::default()
         };
 
         let Some(snapshot) = self.presentation_manager.projections.publish(state) else {

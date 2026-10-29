@@ -145,6 +145,7 @@ pub struct MenuManager {
 /// Owns the committed desktop snapshot stream and presentation actor endpoints.
 pub struct PresentationManager {
     pub menu_tx: Option<menu_bar::Sender>,
+    pub last_projection_signature: Option<u64>,
     pub border_tx: Option<border::Sender>,
     pub command_palette_tx: Option<command_palette::Sender>,
     pub projections: ProjectionHub,

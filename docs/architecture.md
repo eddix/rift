@@ -24,9 +24,10 @@ focus authority because it represents only one display context.
 
 ## Migration status
 
-The menu bar and focused-window border are migrated consumers. The menu bar's
-previous event-specific update calls and lossy view signature have been replaced
-by the shared snapshot stream. The border derives focused-window identity,
+The focused-window border and command palette consume the shared snapshot stream.
+The menu bar uses upstream's display-scoped `Update` projection and render cache;
+it does not build rich workspace/window snapshots. Its latest-wins timer has a
+bounded delay during continuous updates. The border derives focused-window identity,
 visibility, authoritative geometry, and Mission Control suppression from the
 same committed state. WindowServer move/resize notifications form a separate
 presentation-only fast path: they may override the current target frame, but

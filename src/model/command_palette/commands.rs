@@ -42,6 +42,7 @@ pub fn entries(
             L::ToggleFullscreenWithinGaps,
             L::ToggleStack,
             L::ToggleOrientation,
+            L::Balance,
             L::UnjoinWindows,
             L::SnapStrip,
             L::SwitchPresetColumnWidth { backwards: false },
@@ -287,6 +288,9 @@ fn canonical(command: &WmCommand, config: &Config) -> WmCommand {
         WmCommand::ReactorCommand(Command::Reactor(R::ShowMissionControlCurrent)) => {
             reactor(R::ShowMissionControlAll)
         }
+        WmCommand::Sequence(commands) => {
+            WmCommand::Sequence(commands.iter().map(|command| canonical(command, config)).collect())
+        }
         _ => command.clone(),
     }
 }
@@ -393,6 +397,11 @@ fn label(command: &WmCommand, workspaces: &[String], displays: &[(String, String
         },
         WmCommand::ReactorCommand(Command::Metrics(command)) => serialized_label(command),
         WmCommand::Wm(command) => serialized_label(command),
+        WmCommand::Sequence(commands) => commands
+            .iter()
+            .map(|command| label(command, workspaces, displays))
+            .collect::<Vec<_>>()
+            .join(" → "),
         WmCommand::ConfiguredLayout(command) => serialized_label(command),
     }
 }
@@ -660,5 +669,24 @@ mod tests {
     fn shortcut_should_expand_modifier_aliases_and_navigation_keys() {
         assert_eq!(shortcut_glyphs("option + control + shift + ArrowLeft"), "⌥⌃⇧←");
         assert_eq!(shortcut_glyphs("AltRight + Period"), "AltRight.");
+    }
+
+    #[test]
+    fn catalog_should_preserve_a_configured_command_sequence_and_its_shortcut() {
+        let config = Config::parse(
+            r#"
+            [settings]
+            [keys]
+            "Alt + B" = ["balance", { binding_mode = "default" }]
+        "#,
+        )
+        .unwrap();
+        let command = config.binding_mode_specs[0].1[0].1.clone();
+        let entries = commands(&config);
+        let entry = find(&entries, &command, &config);
+        assert_eq!(entry.action, PaletteAction::Command(command));
+        assert_eq!(entry.secondary, "⌥B");
+        assert_eq!(entry.primary, "Balance → Binding Mode → default");
+        assert_eq!(find(&entries, &layout(L::Balance), &config).secondary, "Unbound");
     }
 }

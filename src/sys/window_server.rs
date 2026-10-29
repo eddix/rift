@@ -953,7 +953,13 @@ pub fn key_focused_window() -> Option<(WindowId, SpaceId)> {
     }))?;
 
     let wsid = WindowServerId::new(id);
-    Some((WindowId { pid: query.pid(), idx: NonZeroU32::new(id)? }, window_space(wsid).unwrap_or_else(active_space)))
+    Some((
+        WindowId {
+            pid: query.pid(),
+            idx: NonZeroU32::new(id)?,
+        },
+        window_space(wsid).unwrap_or_else(active_space),
+    ))
 }
 
 /// Returns the PID WindowServer currently considers globally frontmost.

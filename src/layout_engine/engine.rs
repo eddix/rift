@@ -3427,7 +3427,6 @@ impl LayoutEngine {
                 if matches!(workspace.layout_system, LayoutSystemKind::Floating(_)) {
                     continue;
                 }
-                let active_layout = workspace.layout_state.active();
                 let layouts = workspace.layout_state.all_layouts().collect::<HashSet<_>>();
                 if layouts.is_empty() {
                     report.skipped += 1;
@@ -3446,11 +3445,6 @@ impl LayoutEngine {
                 }
                 if reset {
                     report.workspaces += 1;
-                    if active_layout
-                        .is_some_and(|layout| workspace.layout_system.contains_layout(layout))
-                    {
-                        workspace.layout_state.last_saved = active_layout;
-                    }
                 }
             }
         }
@@ -3597,6 +3591,8 @@ impl LayoutEngine {
         }
     }
 
+    // Affinity targets a display-local workspace using a full WindowId. The protocol's
+    // numeric window selector can resolve a different app's window on the destination.
     pub(crate) fn move_window_to_workspace_index_on_space(
         &mut self,
         window_store: &mut WindowStore,
@@ -3622,7 +3618,7 @@ impl LayoutEngine {
         };
 
         let source_workspace = window_store
-            .workspace_for_window(source_space, window_id)
+            .workspace_for_window(window_id)
             .or_else(|| self.workspaces.active_workspace(source_space));
         let Some(source_workspace_id) = source_workspace else {
             return EventResponse::default();
@@ -3687,6 +3683,7 @@ impl LayoutEngine {
             raise_windows: focus_target.then_some(window_id).into_iter().collect(),
             focus_window: focus_target.then_some(window_id).or(replacement_focus),
             boundary_hit: None,
+            ..Default::default()
         }
     }
 

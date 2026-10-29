@@ -278,7 +278,6 @@ impl<'de> Deserialize<'de> for RuntimeDisplayData {
             display_uuid: helper.uuid,
             name: helper.name,
             space: helper.space.map(SpaceId::new),
-            is_builtin: false,
         };
 
         Ok(RuntimeDisplayData {
@@ -346,7 +345,6 @@ mod tests {
     #[test]
     fn display_data_serializes_with_legacy_shape() {
         let info = ScreenInfo {
-            is_builtin: false,
             backing_scale: 1.0,
             id: ScreenId::new(7),
             frame: CGRect::new(CGPoint::new(10.0, 20.0), CGSize::new(300.0, 400.0)),

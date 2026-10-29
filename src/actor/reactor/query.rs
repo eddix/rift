@@ -1,6 +1,6 @@
 use std::sync::mpsc::{RecvError, SyncSender, sync_channel};
 
-use objc2_core_foundation::CGRect;
+use objc2_core_foundation::{CGPoint, CGRect};
 use rift_protocol::{
     ApplicationData, ContainerTreeNode, LayoutStateData, Point, Rect, Size, WindowLayoutPosition,
     WorkspaceLayoutData,
@@ -11,8 +11,10 @@ use crate::actor::menu_bar;
 use crate::actor::reactor::{Event, Reactor, Sender};
 use crate::common::collections::{HashMap, HashSet};
 use crate::layout_engine::systems::LayoutSystem;
-use crate::model::WindowWorkspaceInfo;
-use crate::model::command_palette::{PaletteAction, PaletteEntry, PaletteEntryId, PaletteEntryKind, PaletteFocusOrigin, PaletteSnapshot};
+use crate::model::command_palette::{
+    PaletteAction, PaletteEntry, PaletteEntryId, PaletteEntryKind, PaletteFocusOrigin,
+    PaletteSnapshot,
+};
 use crate::model::server::{
     RuntimeDisplayData, RuntimeWindowData, RuntimeWorkspaceData, protocol_rect,
 };
@@ -124,7 +126,9 @@ impl ReactorQueryHandle {
         rx.recv().map_err(|_| RecvError)
     }
 
-    pub fn query_command_palette(&self) -> PaletteSnapshot { self.send_query(QueryRequest::CommandPalette).unwrap_or_default() }
+    pub fn query_command_palette(&self) -> PaletteSnapshot {
+        self.send_query(QueryRequest::CommandPalette).unwrap_or_default()
+    }
 
     pub fn query_workspaces(&self, space_id: Option<SpaceId>) -> Vec<RuntimeWorkspaceData> {
         self.send_query(|resp| QueryRequest::Workspaces { space_id, resp })
@@ -267,7 +271,9 @@ impl Reactor {
             QueryRequest::WindowInfo { window_id, resp } => {
                 let _ = resp.send(self.query_window_info(window_id));
             }
-            QueryRequest::CommandPalette(resp) => { let _ = resp.send(self.query_command_palette()); }
+            QueryRequest::CommandPalette(resp) => {
+                let _ = resp.send(self.query_command_palette());
+            }
             QueryRequest::Applications(resp) => {
                 let _ = resp.send(self.query_applications());
             }
@@ -298,7 +304,7 @@ impl Reactor {
     }
 
     pub(super) fn maybe_send_menu_update(&mut self) {
-        let menu_tx = match self.menu_manager.menu_tx.as_ref() {
+        let menu_tx = match self.presentation_manager.menu_tx.as_ref() {
             Some(tx) => tx.clone(),
             None => return,
         };
@@ -338,10 +344,10 @@ impl Reactor {
             displays,
         };
         let signature = menu_bar::sig(&update);
-        if self.menu_manager.last_projection_signature == Some(signature) {
+        if self.presentation_manager.last_projection_signature == Some(signature) {
             return;
         }
-        self.menu_manager.last_projection_signature = Some(signature);
+        self.presentation_manager.last_projection_signature = Some(signature);
         menu_tx.send(menu_bar::Event::Update(update));
     }
 
@@ -363,7 +369,7 @@ impl Reactor {
     /// The workspaces `space` owns. A global catalog view spans every visible display,
     /// but each display's menu entry lists only its own, or the others would repeat.
     /// Indices stay catalog positions, which is what switching resolves them against.
-    fn menu_workspaces(&mut self, space: SpaceId) -> Vec<menu_bar::Workspace> {
+    pub(super) fn menu_workspaces(&mut self, space: SpaceId) -> Vec<menu_bar::Workspace> {
         use crate::common::config::{MenuBarDisplayMode, WorkspaceDisplayStyle};
         let settings = &self.config.settings.ui.menu_bar;
         let show_layout =
@@ -492,7 +498,6 @@ impl Reactor {
         #[cfg(test)]
         let server_focus: Option<(WindowId, SpaceId)> = None;
         let focused_window = server_focus.map(|(window, _)| window).or_else(|| self.main_window());
-        let focused_record = focused_window.and_then(|window| self.state.windows.record(window));
         let focused_display = focused_window
             .and_then(|window| self.state.windows.window(window))
             .and_then(|window| {
@@ -507,8 +512,13 @@ impl Reactor {
                         && center.y <= screen.frame.origin.y + screen.frame.size.height
                 })
             });
-        let focused_space = focused_record
-            .and_then(|record| record.native_space().or(record.workspace().map(|item| item.space)))
+        let focused_space = focused_window
+            .and_then(|window| {
+                self.state
+                    .windows
+                    .native_space(window)
+                    .or_else(|| self.assigned_space_for_window_id(window))
+            })
             .or_else(|| focused_display.and_then(|screen| screen.space))
             .or_else(|| self.default_query_space());
 
@@ -528,7 +538,7 @@ impl Reactor {
         }
         let show_display_metadata = display_by_space.len() > 1;
 
-        let mut workspace_labels: HashMap<WindowWorkspaceInfo, WorkspaceLabel> = HashMap::default();
+        let mut workspace_labels: HashMap<VirtualWorkspaceId, WorkspaceLabel> = HashMap::default();
         for screen in &self.space_state.screens {
             let Some(space) = screen.space else {
                 continue;
@@ -537,16 +547,10 @@ impl Reactor {
             for (workspace_id, name) in
                 self.layout_manager.layout_engine.workspaces().existing_workspaces(space).iter()
             {
-                workspace_labels.insert(
-                    WindowWorkspaceInfo {
-                        space,
-                        workspace_id: *workspace_id,
-                    },
-                    WorkspaceLabel {
-                        name: name.clone(),
-                        is_active: active == Some(*workspace_id),
-                    },
-                );
+                workspace_labels.insert(*workspace_id, WorkspaceLabel {
+                    name: name.clone(),
+                    is_active: active == Some(*workspace_id),
+                });
             }
         }
 
@@ -579,12 +583,13 @@ impl Reactor {
             {
                 continue;
             }
-            let record = self.state.windows.record(window_id);
-            let assignment = record.and_then(|record| record.workspace());
+            let assignment = self.state.windows.workspace_for_window(window_id);
             let workspace = assignment.and_then(|assignment| workspace_labels.get(&assignment));
-            let native_space = record
-                .and_then(|record| record.native_space())
-                .or_else(|| assignment.map(|assignment| assignment.space));
+            let native_space = self.state.windows.native_space(window_id).or_else(|| {
+                assignment.map(|assignment| {
+                    self.layout_manager.layout_engine.workspaces()[assignment].space
+                })
+            });
             let display = native_space.and_then(|space| display_by_space.get(&space));
             let app_name = app.info.localized_name.clone().unwrap_or_else(|| "Unknown".to_string());
             let title = if state.info.title.is_empty() {

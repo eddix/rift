@@ -242,7 +242,6 @@ pub fn run(ui: Ui) {
             display_uuid: "test-display".into(),
             name: Some("Test display".into()),
             frame: Default::default(),
-            is_builtin: false,
             backing_scale: 1.0,
             space: None,
         }]);
@@ -829,7 +828,6 @@ pub fn run(ui: Ui) {
                 display_uuid: "focused-display".into(),
                 name: Some("Focused display".into()),
                 frame: Default::default(),
-                is_builtin: false,
                 backing_scale: 1.0,
                 space: None,
             }]);
@@ -952,7 +950,6 @@ pub fn run(ui: Ui) {
                 display_uuid: "disp-a".into(),
                 name: Some("Display A".into()),
                 frame: Default::default(),
-                is_builtin: false,
                 backing_scale: 1.0,
                 space: None,
             }]);
@@ -1684,7 +1681,6 @@ pub fn render(
                 is_builtin: id == 2,
                 id: crate::sys::screen::ScreenId::new(id),
                 frame: CGRect::new(CGPoint::new(0.0, 0.0), CGSize::new(1512.0, 982.0)),
-                is_builtin: false,
                 backing_scale: 2.0,
                 display_uuid: uuid.into(),
                 name: Some(name.into()),

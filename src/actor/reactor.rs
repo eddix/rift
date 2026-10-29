@@ -574,6 +574,7 @@ impl Reactor {
             menu_manager: managers::MenuManager { menu_state: MenuState::Closed },
             presentation_manager: managers::PresentationManager {
                 menu_tx: None,
+                last_projection_signature: None,
                 border_tx: None,
                 command_palette_tx: None,
                 projections: crate::model::projection::ProjectionHub::default(),
@@ -1353,6 +1354,9 @@ impl Reactor {
         }
         self.presentation_manager.transaction_depth -= 1;
         if self.presentation_manager.transaction_depth == 0 {
+            if affects_desktop_state {
+                self.maybe_send_menu_update();
+            }
             self.publish_desktop_snapshot();
         }
     }
@@ -1377,39 +1381,43 @@ impl Reactor {
         command: layout::LayoutCommand,
         mut command_space: Option<SpaceId>,
     ) -> anyhow::Result<EventOutcome> {
-        let command = if self.config.virtual_workspaces.mode == crate::common::config::WorkspaceMode::PerDisplay {
-        let command = match command {
-            layout::LayoutCommand::NextWorkspace(skip_empty) => self
-                .workspace_index_for_affinity_navigation(Direction::Right, skip_empty)
-                .map(layout::LayoutCommand::SwitchToWorkspace)
-                .unwrap_or(layout::LayoutCommand::NextWorkspace(skip_empty)),
-            layout::LayoutCommand::PrevWorkspace(skip_empty) => self
-                .workspace_index_for_affinity_navigation(Direction::Left, skip_empty)
-                .map(layout::LayoutCommand::SwitchToWorkspace)
-                .unwrap_or(layout::LayoutCommand::PrevWorkspace(skip_empty)),
-            command => command,
-        };
-        if let layout::LayoutCommand::SwitchToWorkspace(workspace_index) = &command
-            && let Some(outcome) =
-                self.refocus_active_workspace_on_affinity_display(*workspace_index)
+        let command = if self.config.virtual_workspaces.mode
+            == crate::common::config::WorkspaceMode::PerDisplay
         {
-            return Ok(outcome);
-        }
-        if let layout::LayoutCommand::MoveWindowToWorkspace { workspace, follow, window_id } =
-            &command
-            && let Some(outcome) =
-                self.move_window_to_affinity_display(workspace, *follow, *window_id)
-        {
-            return outcome;
-        }
-        command_space = match &command {
-            layout::LayoutCommand::SwitchToWorkspace(workspace_index) => self
-                .preferred_space_for_workspace(*workspace_index)
-                .or_else(|| self.command_context_space()),
-            _ => self.command_context_space(),
+            let command = match command {
+                layout::LayoutCommand::NextWorkspace(skip_empty) => self
+                    .workspace_index_for_affinity_navigation(Direction::Right, skip_empty)
+                    .map(layout::LayoutCommand::SwitchToWorkspace)
+                    .unwrap_or(layout::LayoutCommand::NextWorkspace(skip_empty)),
+                layout::LayoutCommand::PrevWorkspace(skip_empty) => self
+                    .workspace_index_for_affinity_navigation(Direction::Left, skip_empty)
+                    .map(layout::LayoutCommand::SwitchToWorkspace)
+                    .unwrap_or(layout::LayoutCommand::PrevWorkspace(skip_empty)),
+                command => command,
+            };
+            if let layout::LayoutCommand::SwitchToWorkspace(workspace_index) = &command
+                && let Some(outcome) =
+                    self.refocus_active_workspace_on_affinity_display(*workspace_index)
+            {
+                return Ok(outcome);
+            }
+            if let layout::LayoutCommand::MoveWindowToWorkspace { workspace, follow, window_id } =
+                &command
+                && let Some(outcome) =
+                    self.move_window_to_affinity_display(workspace, *follow, *window_id)
+            {
+                return outcome;
+            }
+            command_space = match &command {
+                layout::LayoutCommand::SwitchToWorkspace(workspace_index) => self
+                    .preferred_space_for_workspace(*workspace_index)
+                    .or_else(|| self.command_context_space()),
+                _ => self.command_context_space(),
+            };
+            command
+        } else {
+            command
         };
-        command
-        } else { command };
         let post_arrange_mouse_warp =
             self.config.settings.mouse_follows_focus.then(|| self.main_window()).flatten();
         let is_move_node = matches!(command, layout::LayoutCommand::MoveNode(_));
@@ -4766,8 +4774,8 @@ impl Reactor {
             self.send_layout_event(LayoutEvent::WindowRemoved(wid));
             return;
         }
-        let previous_assignment = self.state.windows.workspace_info_for_window(wid);
-        if previous_assignment.is_some_and(|assignment| assignment.space != space)
+        let previous_assignment = self.assigned_space_for_window_id(wid);
+        if previous_assignment.is_some_and(|assignment| assignment != space)
             && !self.is_in_drag()
             && let Some(affinity_space) = self.workspace_affinity_space(wid)
             && affinity_space != space
@@ -5481,14 +5489,15 @@ impl Reactor {
             if !self.state.windows.window(window).is_some_and(WindowState::is_admitted) {
                 continue;
             }
-            let Some(assignment) = self.state.windows.workspace_info_for_window(window) else {
+            let Some(assignment) = self.state.windows.workspace_for_window(window) else {
                 continue;
             };
+            let assignment_space = self.layout_manager.layout_engine.workspaces()[assignment].space;
             let Some(workspace_index) = self
                 .layout_manager
                 .layout_engine
                 .workspaces()
-                .workspace_index(assignment.space, assignment.workspace_id)
+                .workspace_index(assignment_space, assignment)
             else {
                 continue;
             };
@@ -5496,12 +5505,12 @@ impl Reactor {
             else {
                 continue;
             };
-            if target_screen.space == Some(assignment.space) {
+            if target_screen.space == Some(assignment_space) {
                 continue;
             }
             match self.move_tracked_window_to_workspace_display(
                 window,
-                assignment.space,
+                assignment_space,
                 target_screen,
                 workspace_index,
                 false,
@@ -5575,11 +5584,11 @@ impl Reactor {
                 continue;
             };
             let current_workspace_index =
-                self.state.windows.workspace_info_for_window(window).and_then(|assignment| {
-                    self.layout_manager
-                        .layout_engine
-                        .workspaces()
-                        .workspace_index(assignment.space, assignment.workspace_id)
+                self.state.windows.workspace_for_window(window).and_then(|assignment| {
+                    self.layout_manager.layout_engine.workspaces().workspace_index(
+                        self.layout_manager.layout_engine.workspaces()[assignment].space,
+                        assignment,
+                    )
                 });
             if source_space == target_space
                 && current_workspace_index == Some(target_workspace_index)
@@ -5640,10 +5649,11 @@ impl Reactor {
         target_space: SpaceId,
         invalidated_spaces: &[SpaceId],
     ) -> bool {
-        let Some(assignment) = self.state.windows.workspace_info_for_window(window) else {
+        let Some(assignment) = self.state.windows.workspace_for_window(window) else {
             return false;
         };
-        invalidated_spaces.contains(&assignment.space)
+        invalidated_spaces
+            .contains(&self.layout_manager.layout_engine.workspaces()[assignment].space)
             || self.workspace_affinity_matches_space(window, target_space)
     }
 
@@ -5652,15 +5662,13 @@ impl Reactor {
     }
 
     fn workspace_affinity_space(&self, window: WindowId) -> Option<SpaceId> {
-        let Some(assignment) = self.state.windows.workspace_info_for_window(window) else {
+        let Some(assignment) = self.state.windows.workspace_for_window(window) else {
             return None;
         };
-        let Some(workspace_index) = self
-            .layout_manager
-            .layout_engine
-            .workspaces()
-            .workspace_index(assignment.space, assignment.workspace_id)
-        else {
+        let Some(workspace_index) = self.layout_manager.layout_engine.workspaces().workspace_index(
+            self.layout_manager.layout_engine.workspaces()[assignment].space,
+            assignment,
+        ) else {
             return None;
         };
         self.preferred_screen_for_workspace(workspace_index)
@@ -6136,7 +6144,7 @@ impl Reactor {
             if !window.is_admitted() {
                 untiled.push(window_id);
             } else if active_workspace.is_some()
-                && self.state.windows.workspace_for_window(space, window_id) == active_workspace
+                && self.state.windows.workspace_for_window(window_id) == active_workspace
             {
                 if engine.is_window_floating(window_id) {
                     untiled.push(window_id);
@@ -6184,6 +6192,7 @@ impl Reactor {
                 raise_windows: Vec::new(),
                 focus_window: Some(target),
                 boundary_hit: None,
+                ..Default::default()
             },
             None,
         )
@@ -6259,6 +6268,7 @@ impl Reactor {
                 raise_windows: Vec::new(),
                 focus_window: Some(target),
                 boundary_hit: None,
+                ..Default::default()
             },
             None,
         )
@@ -6782,6 +6792,7 @@ impl Reactor {
             window_title: Some(&state.info.title),
             ax_role: state.info.ax_role.as_deref(),
             ax_subrole: state.info.ax_subrole.as_deref(),
+            ax_identifier: state.info.ax_identifier.as_deref(),
         }) {
             return;
         }
@@ -6849,6 +6860,9 @@ impl Reactor {
     }
 
     fn preferred_screen_for_workspace(&self, workspace_index: usize) -> Option<&ScreenInfo> {
+        if self.config.virtual_workspaces.mode != crate::common::config::WorkspaceMode::PerDisplay {
+            return None;
+        }
         let target =
             self.config.virtual_workspaces.display_target_for_workspace(workspace_index)?;
         let ordered = self.screens_in_physical_order();
@@ -6901,6 +6915,7 @@ impl Reactor {
                 raise_windows: Vec::new(),
                 focus_window: Some(focus_window),
                 boundary_hit: None,
+                ..Default::default()
             },
             Some(target_space),
         ))
@@ -6936,12 +6951,7 @@ impl Reactor {
                         .preferred_screen_for_workspace(candidate)
                         .is_none_or(|screen| screen.space == Some(space));
             let satisfies_empty_policy = skip_empty != Some(true)
-                || !self
-                    .layout_manager
-                    .layout_engine
-                    .workspaces()
-                    .workspace_windows(&self.state.windows, space, workspaces[candidate].0)
-                    .is_empty();
+                || !self.state.windows.workspace_windows(workspaces[candidate].0).is_empty();
             if target_available_here && satisfies_empty_policy {
                 return Some(candidate);
             }
@@ -7013,11 +7023,8 @@ impl Reactor {
         else {
             return Ok(EventOutcome::no_change());
         };
-        let Some((window_server_id, mut target_frame)) = self
-            .state
-            .windows
-            .window(window)
-            .map(|window| (window.info.sys_id, window.frame_monotonic))
+        let Some(mut target_frame) =
+            self.state.windows.window(window).map(|window| window.frame_monotonic)
         else {
             return Ok(EventOutcome::no_change());
         };
@@ -7040,7 +7047,6 @@ impl Reactor {
             &mut self.layout_manager,
             command_workflow::MoveWindowToWorkspaceDisplayPayload {
                 window,
-                window_server_id,
                 source_space,
                 target_space,
                 target_workspace_index,

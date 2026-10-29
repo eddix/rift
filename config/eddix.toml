@@ -69,7 +69,7 @@ window_insertion_point = "end_of_tree"
 enabled = true
 show_empty = false
 mode = "active"
-active_label = "name"
+active_label = "index"
 display_style = "label"
 
 [settings.ui.border]
@@ -87,6 +87,17 @@ hidpi = true
 enabled = true
 max_results = 8
 width = 640.0
+
+[settings.ui.mission_control]
+enabled = false
+fade_duration_ms = 0.0
+show_empty_workspaces = false
+window_previews = false
+
+[settings.ui.stack_line]
+horiz_placement = "top"
+spacing = 4.0
+thickness = 24.0
 
 [virtual_workspaces]
 enabled = true
