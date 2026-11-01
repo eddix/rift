@@ -1,3 +1,7 @@
+# Canonical config Gist: https://gist.github.com/eddix/d1ccc24ec3af583b6842ce3ac99d57d3
+# Gist file: config.toml; repository mirror: eddix/rift:eddix/main/config/eddix.toml
+# Keep the Gist, this file, and the repository mirror in sync.
+
 [settings]
 animate = false
 animation_duration = 0.15

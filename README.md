@@ -57,8 +57,13 @@ Get up and running via the docs:
 ## eddix build and configuration
 
 The `eddix/main` branch contains the downstream features used by the personal
-configuration in [`config/eddix.toml`](config/eddix.toml), including workspace
-display affinity, borders, the command palette, and AX identifier rules.
+configuration, including workspace display affinity, borders, the command
+palette, and AX identifier rules.
+
+The canonical personal configuration is the
+[Rift config Gist](https://gist.github.com/eddix/d1ccc24ec3af583b6842ce3ac99d57d3).
+[`config/eddix.toml`](config/eddix.toml) is its repository mirror. Keep the Gist,
+the local configuration, and this mirror in sync when changing the profile.
 
 To use this build on another Mac:
 
