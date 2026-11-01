@@ -144,6 +144,7 @@ app_rules = [
 
   # Workspace 3: terminals and Herdr. Zed intentionally remains movable.
   { app_id = "com.mitchellh.ghostty", workspace = 2 },
+  { app_id = "dev.herdr.app", workspace = 2 },
   { app_id = "so.pen.herdr-gpui", workspace = 2 },
   { app_id = "com.apple.Terminal", workspace = 2 },
 
