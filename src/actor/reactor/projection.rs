@@ -45,7 +45,7 @@ impl Reactor {
 
         let window_server_id = state.info.sys_id?;
         let space = self.best_space_for_window_id(window)?;
-        let kind = if !state.is_admitted() {
+        let kind = if !self.state.windows.is_admitted(window) {
             BorderWindowKind::Unmanaged
         } else if self.layout_manager.layout_engine.is_window_floating(window) {
             BorderWindowKind::Floating

@@ -665,6 +665,9 @@ impl Reactor {
     }
 
     fn window_needs_inventory(&self, wid: WindowId) -> bool {
+        if self.state.windows.is_claimed(wid) {
+            return false;
+        }
         self.state.windows.window(wid).is_none_or(|window| {
             // A rejected window is stale only if it now passes the normal
             // eligibility checks. Minimized, rule-excluded, and heuristic-
@@ -1751,7 +1754,7 @@ impl Reactor {
                 if !self.state.windows.contains_window(window) {
                     return Ok(EventOutcome::default());
                 }
-                if !self.state.windows.window(window).is_some_and(WindowState::is_admitted) {
+                if !self.state.windows.is_admitted(window) {
                     return Ok(EventOutcome::default());
                 }
                 return Ok(if self.is_space_active(reported_space) {
@@ -5738,7 +5741,7 @@ impl Reactor {
             return;
         }
         for window in windows {
-            if !self.state.windows.window(window).is_some_and(WindowState::is_admitted) {
+            if !self.state.windows.is_admitted(window) {
                 continue;
             }
             let Some(assignment) = self.state.windows.workspace_for_window(window) else {
@@ -5810,7 +5813,7 @@ impl Reactor {
             .state
             .windows
             .iter_windows()
-            .filter(|(_, state)| state.is_admitted())
+            .filter(|(window, _)| self.state.windows.is_admitted(*window))
             .filter_map(|(window, _)| {
                 self.configured_workspace_index_for_window(window)
                     .map(|workspace| (window, workspace))
@@ -6398,7 +6401,7 @@ impl Reactor {
             {
                 continue;
             }
-            if !window.is_admitted() {
+            if !self.state.windows.is_admitted(window_id) {
                 untiled.push(window_id);
             } else if active_workspace.is_some()
                 && self.state.windows.workspace_for_window(window_id) == active_workspace

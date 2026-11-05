@@ -73,7 +73,7 @@ pub fn handle_mouse_up(
     drag.release_preview();
     let window = commit.source.window;
     drag.externally_controlled_window = None;
-    let dragged_is_admitted = state.windows.window(window).is_some_and(WindowState::is_admitted);
+    let dragged_is_admitted = state.windows.is_admitted(window);
     let mut needs_layout = commit.source.tiled && dragged_is_admitted;
 
     if !dragged_is_admitted {

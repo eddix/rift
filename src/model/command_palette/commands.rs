@@ -1,8 +1,11 @@
 //! Executable commands and shortcuts from the same runtime configuration as hotkeys.
 
+use std::sync::LazyLock;
+
 use rift_protocol::{
-    Direction, DisplaySelector, LayoutCommand as L, LayoutMode, MetricsCommand,
-    ReactorCommand as R, ResizeOrientation, RestoreScope, RestoreSource, WorkspaceSelector,
+    CommandArgument as Arg, Direction, DisplaySelector, LayoutCommand as L, LayoutMode,
+    MetricsCommand, ReactorCommand as R, ResizeOrientation, RestoreScope, RestoreSource,
+    WorkspaceSelector,
 };
 use serde_json::Value;
 
@@ -13,6 +16,133 @@ use crate::model::reactor::Command;
 
 fn layout(command: L) -> WmCommand { WmCommand::ReactorCommand(Command::Layout(command)) }
 fn reactor(command: R) -> WmCommand { WmCommand::ReactorCommand(Command::Reactor(command)) }
+
+type CatalogEntry = (usize, &'static str, usize, WmCommand);
+
+fn catalog() -> &'static [CatalogEntry] {
+    static CATALOG: LazyLock<Vec<CatalogEntry>> = LazyLock::new(|| {
+        let mut entries: Vec<_> =
+            L::command_catalog()
+                .into_iter()
+                .map(|(group, label, order, command)| (group, label, order, layout(command)))
+                .chain(
+                    R::command_catalog().into_iter().map(|(group, label, order, command)| {
+                        (group, label, order, reactor(command))
+                    }),
+                )
+                .chain(WmCmd::command_catalog().into_iter().map(
+                    |(group, label, order, command)| (group, label, order, WmCommand::Wm(command)),
+                ))
+                .collect();
+        entries.sort_by_key(|(group, _, order, _)| (*group, *order));
+        entries
+    });
+    &CATALOG
+}
+
+fn argument(command: &WmCommand) -> Option<Arg> {
+    match command {
+        WmCommand::ReactorCommand(Command::Layout(command)) => command.command_argument(),
+        WmCommand::ReactorCommand(Command::Reactor(command)) => command.command_argument(),
+        WmCommand::Wm(command) => command.command_argument(),
+        _ => None,
+    }
+    .map(|(argument, _)| argument)
+}
+
+fn with_argument(command: &WmCommand, argument: Arg) -> Option<WmCommand> {
+    match command {
+        WmCommand::ReactorCommand(Command::Layout(command)) => {
+            command.with_command_argument(argument).map(layout)
+        }
+        WmCommand::ReactorCommand(Command::Reactor(command)) => {
+            command.with_command_argument(argument).map(reactor)
+        }
+        WmCommand::Wm(command) => command.with_command_argument(argument).map(WmCommand::Wm),
+        _ => None,
+    }
+}
+
+fn variants(command: &WmCommand, displays: &[(String, String)]) -> Vec<WmCommand> {
+    // Catalog samples are editor templates. These actions need concrete runtime
+    // targets or user-supplied arguments before they can execute from a palette.
+    if matches!(
+        command,
+        WmCommand::ReactorCommand(Command::Layout(L::SwapWindows(..) | L::MoveStackTab { .. }))
+            | WmCommand::ReactorCommand(Command::Reactor(
+                R::FocusWindow { .. } | R::SaveLayout { .. } | R::RestoreLayout { .. }
+            ))
+            | WmCommand::Wm(
+                WmCmd::Exec(_)
+                    | WmCmd::BindingMode(_)
+                    | WmCmd::SwitchToWorkspace(_)
+                    | WmCmd::MoveWindowToWorkspace(_)
+            )
+    ) {
+        return Vec::new();
+    }
+    if matches!(
+        command,
+        WmCommand::ReactorCommand(Command::Layout(L::SetWorkspaceLayout { .. }))
+    ) {
+        return [
+            LayoutMode::Traditional,
+            LayoutMode::Bsp,
+            LayoutMode::Stack,
+            LayoutMode::MasterStack,
+            LayoutMode::Scrolling,
+            LayoutMode::Floating,
+        ]
+        .map(|mode| layout(L::SetWorkspaceLayout { workspace: None, mode }))
+        .into();
+    }
+    let arguments: Vec<_> = match argument(command) {
+        Some(Arg::Direction(_)) => [
+            Direction::Left,
+            Direction::Right,
+            Direction::Up,
+            Direction::Down,
+        ]
+        .into_iter()
+        .filter(|direction| {
+            !matches!(
+                command,
+                WmCommand::ReactorCommand(Command::Reactor(R::SwitchSpace(_)))
+            ) || matches!(direction, Direction::Left | Direction::Right)
+        })
+        .map(Arg::Direction)
+        .collect(),
+        Some(Arg::Display(_)) => [
+            Direction::Left,
+            Direction::Right,
+            Direction::Up,
+            Direction::Down,
+        ]
+        .into_iter()
+        .map(DisplaySelector::Direction)
+        .chain(displays.iter().map(|(uuid, _)| DisplaySelector::Uuid(uuid.clone())))
+        .map(Arg::Display)
+        .collect(),
+        Some(Arg::Orientation(_)) => [
+            ResizeOrientation::Smart,
+            ResizeOrientation::Horizontal,
+            ResizeOrientation::Vertical,
+        ]
+        .map(Arg::Orientation)
+        .into(),
+        Some(Arg::Number(value)) => [value, -value].map(Arg::Number).into(),
+        Some(Arg::Integer(value)) => [value, -value].map(Arg::Integer).into(),
+        Some(Arg::Backwards(_)) => [false, true].map(Arg::Backwards).into(),
+        Some(Arg::Workspace(_) | Arg::WorkspaceIndex(_) | Arg::Layout(_) | Arg::Keymap(_)) => {
+            return Vec::new();
+        }
+        None => return vec![command.clone()],
+    };
+    arguments
+        .into_iter()
+        .filter_map(|argument| with_argument(command, argument))
+        .collect()
+}
 
 pub fn entries(
     config: &Config,
@@ -30,133 +160,17 @@ pub fn entries(
             }));
         }
     }
-    commands.extend(
-        [
-            L::NextWindow,
-            L::PrevWindow,
-            L::Ascend,
-            L::Descend,
-            L::ToggleFocusFloating,
-            L::ToggleWindowFloating,
-            L::ToggleFullscreen,
-            L::ToggleFullscreenWithinGaps,
-            L::ToggleStack,
-            L::ToggleOrientation,
-            L::Balance,
-            L::UnjoinWindows,
-            L::SnapStrip,
-            L::SwitchPresetColumnWidth { backwards: false },
-            L::SwitchPresetColumnWidth { backwards: true },
-            L::CenterSelection,
-            L::NextWorkspace(None),
-            L::PrevWorkspace(None),
-            L::CreateWorkspace,
-            L::SwitchToLastWorkspace,
-            L::AdjustMasterRatio(0.05),
-            L::AdjustMasterRatio(-0.05),
-            L::AdjustMasterCount { delta: 1 },
-            L::AdjustMasterCount { delta: -1 },
-            L::PromoteToMaster,
-            L::SwapMasterStack,
-            L::ScrollStrip { delta: 100.0 },
-            L::ScrollStrip { delta: -100.0 },
-            L::ResizeWindowBy { amount: 10.0 },
-            L::ResizeWindowBy { amount: -10.0 },
-        ]
-        .map(layout),
-    );
-    for direction in [
-        Direction::Left,
-        Direction::Right,
-        Direction::Up,
-        Direction::Down,
-    ] {
-        commands.extend(
-            [
-                L::MoveFocus(direction),
-                L::MoveNode(direction),
-                L::JoinWindow(direction),
-                L::ConsumeOrExpelWindow(direction),
-            ]
-            .map(layout),
-        );
-        let selector = DisplaySelector::Direction(direction);
-        commands.extend(
-            [
-                R::FocusDisplay(selector.clone()),
-                R::MoveMouseToDisplay(selector.clone()),
-                R::MoveWindowToDisplay {
-                    selector: selector.clone(),
-                    window_id: None,
-                },
-                R::MoveWorkspaceToDisplay { selector, wrap_around: false },
-            ]
-            .map(reactor),
-        );
+    for (_, _, _, command) in catalog() {
+        commands.extend(variants(command, displays));
     }
-    for orientation in [
-        ResizeOrientation::Smart,
-        ResizeOrientation::Horizontal,
-        ResizeOrientation::Vertical,
-    ] {
-        commands.extend(
-            [
-                L::ResizeWindowGrow(orientation),
-                L::ResizeWindowShrink(orientation),
-            ]
-            .map(layout),
-        );
-    }
-    for mode in [
-        LayoutMode::Traditional,
-        LayoutMode::Bsp,
-        LayoutMode::Stack,
-        LayoutMode::MasterStack,
-        LayoutMode::Scrolling,
-        LayoutMode::Floating,
-    ] {
-        commands.push(layout(L::SetWorkspaceLayout { workspace: None, mode }));
-    }
-    for (uuid, _) in displays {
-        let selector = DisplaySelector::Uuid(uuid.clone());
-        commands.extend(
-            [
-                R::FocusDisplay(selector.clone()),
-                R::MoveMouseToDisplay(selector.clone()),
-                R::MoveWindowToDisplay {
-                    selector: selector.clone(),
-                    window_id: None,
-                },
-                R::MoveWorkspaceToDisplay { selector, wrap_around: false },
-            ]
-            .map(reactor),
-        );
-    }
-    commands.extend(
-        [
-            R::OpenSettings,
-            R::ToggleSpaceActivated,
-            R::ToggleFocusUntiled,
-            R::CycleUntiledWindows,
-            R::ToggleFocusUnmanaged,
-            R::CycleUnmanagedWindows,
-            R::ResetAllWorkspaces,
-            R::ShowMissionControlAll,
-            R::DismissMissionControl,
-            R::SwitchSpace(Direction::Left),
-            R::SwitchSpace(Direction::Right),
-            R::CloseWindow { window_server_id: None },
-            R::Debug,
-            R::Serialize,
-            R::SaveAndExit,
-        ]
-        .map(reactor),
-    );
-    commands.push(WmCommand::Wm(WmCmd::ReloadConfig));
     commands.push(reactor(R::SaveLayout {
         path: crate::common::config::restore_file(),
     }));
-    for scope in [RestoreScope::Workspace, RestoreScope::Space] {
+    for scope in [
+        RestoreScope::Workspace,
+        RestoreScope::Space,
+        RestoreScope::Displays,
+    ] {
         commands.push(reactor(R::RestoreLayout {
             path: crate::common::config::restore_file(),
             scope,
@@ -386,6 +400,7 @@ fn label(command: &WmCommand, workspaces: &[String], displays: &[(String, String
                 let scope = match scope {
                     RestoreScope::Workspace => "Workspace",
                     RestoreScope::Space => "Display",
+                    RestoreScope::Displays => "All Displays",
                 };
                 let source = match source {
                     RestoreSource::CurrentSpace => "Current Display",
@@ -409,7 +424,7 @@ fn label(command: &WmCommand, workspaces: &[String], displays: &[(String, String
 fn serialized_label(command: &impl serde::Serialize) -> String {
     fn title(value: &str) -> String {
         value
-            .split('_')
+            .split(['_', ' '])
             .map(|word| {
                 let mut chars = word.chars();
                 chars
@@ -419,12 +434,30 @@ fn serialized_label(command: &impl serde::Serialize) -> String {
             .collect::<Vec<_>>()
             .join(" ")
     }
+    fn variant(value: &Value) -> Option<&str> {
+        match value {
+            Value::String(name) => Some(name),
+            Value::Object(fields) => fields.keys().next().map(String::as_str),
+            _ => None,
+        }
+    }
+    static LABELS: LazyLock<std::collections::HashMap<String, &'static str>> =
+        LazyLock::new(|| {
+            catalog()
+                .iter()
+                .filter_map(|(_, label, _, command)| {
+                    let value = serde_json::to_value(command).ok()?;
+                    Some((variant(&value)?.to_string(), *label))
+                })
+                .collect()
+        });
+    let describe_name = |name: &str| title(LABELS.get(name).copied().unwrap_or(name));
     match serde_json::to_value(command) {
-        Ok(Value::String(name)) => title(&name),
+        Ok(Value::String(value)) => describe_name(&value),
         Ok(Value::Object(object)) => object
             .into_iter()
             .map(|(name, value)| {
-                let name = title(&name);
+                let name = describe_name(&name);
                 match value {
                     Value::Null => name,
                     Value::String(value) => format!("{name} → {value}"),
@@ -666,6 +699,29 @@ mod tests {
     }
 
     #[test]
+    fn unbound_catalog_does_not_offer_editor_placeholders_as_executable_commands() {
+        let mut config = Config::default();
+        config.binding_mode_specs.clear();
+        for entry in commands(&config) {
+            match entry.action {
+                PaletteAction::Command(WmCommand::ReactorCommand(Command::Layout(
+                    L::SwapWindows(..) | L::MoveStackTab { .. },
+                )))
+                | PaletteAction::Command(WmCommand::ReactorCommand(Command::Reactor(
+                    R::FocusWindow { .. },
+                )))
+                | PaletteAction::Command(WmCommand::Wm(WmCmd::Exec(_))) => {
+                    panic!("unresolved editor template: {}", entry.primary)
+                }
+                PaletteAction::Command(WmCommand::ReactorCommand(Command::Reactor(
+                    R::SaveLayout { path } | R::RestoreLayout { path, .. },
+                ))) => assert!(!path.as_os_str().is_empty()),
+                _ => {}
+            }
+        }
+    }
+
+    #[test]
     fn shortcut_should_expand_modifier_aliases_and_navigation_keys() {
         assert_eq!(shortcut_glyphs("option + control + shift + ArrowLeft"), "⌥⌃⇧←");
         assert_eq!(shortcut_glyphs("AltRight + Period"), "AltRight.");
@@ -686,7 +742,8 @@ mod tests {
         let entry = find(&entries, &command, &config);
         assert_eq!(entry.action, PaletteAction::Command(command));
         assert_eq!(entry.secondary, "⌥B");
-        assert_eq!(entry.primary, "Balance → Binding Mode → default");
+        assert!(entry.primary.starts_with("Balance → "));
+        assert!(entry.primary.ends_with(" → default"));
         assert_eq!(find(&entries, &layout(L::Balance), &config).secondary, "Unbound");
     }
 }

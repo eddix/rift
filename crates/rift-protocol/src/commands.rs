@@ -220,10 +220,15 @@ pub enum ReactorCommand {
         window_id: WindowId,
         window_server_id: Option<u32>,
     },
+    #[command(group = 1, label = "Toggle focus unmanaged", order = 58)]
     ToggleFocusUnmanaged,
+    #[command(group = 1, label = "Cycle unmanaged windows", order = 59)]
     CycleUnmanagedWindows,
+    #[command(group = 1, label = "Toggle focus untiled", order = 56)]
     ToggleFocusUntiled,
+    #[command(group = 1, label = "Cycle untiled windows", order = 57)]
     CycleUntiledWindows,
+    #[command(group = 4, label = "Reset all workspaces", order = 60)]
     ResetAllWorkspaces,
     #[command(skip)]
     ShowMissionControlAll,
@@ -231,7 +236,9 @@ pub enum ReactorCommand {
     ShowMissionControlCurrent,
     #[command(skip)]
     DismissMissionControl,
+    #[command(skip)]
     ToggleCommandPalette,
+    #[command(skip)]
     ToggleCommandPaletteCommands,
     #[command(group = 3, label = "Move pointer to display", order = 38)]
     MoveMouseToDisplay(DisplaySelector),

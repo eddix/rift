@@ -6,7 +6,7 @@ use std::ffi::{c_int, c_uint, c_void};
 use std::fmt;
 
 use bitflags::bitflags;
-pub use cgs::G_CONNECTION;
+pub use cgs::compositor::G_CONNECTION;
 use num_enum::{IntoPrimitive, TryFromPrimitive};
 use objc2_application_services::{AXError, AXUIElement};
 use objc2_core_foundation::{

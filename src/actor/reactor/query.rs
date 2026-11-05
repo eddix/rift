@@ -621,7 +621,7 @@ impl Reactor {
             if let Some(display) = display_name {
                 keywords.push(display.to_string());
             }
-            keywords.push(if state.is_admitted() {
+            keywords.push(if self.state.windows.is_admitted(window_id) {
                 "managed".to_string()
             } else {
                 "unmanaged".to_string()

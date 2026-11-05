@@ -276,7 +276,7 @@ pub fn handle_window_frame_changed(
     };
     let server_id = window.info.sys_id;
     let old_frame = window.frame_monotonic;
-    let is_admitted = window.is_admitted();
+    let is_admitted = state.windows.is_admitted(wid);
 
     if !old_space_active && !new_space_active {
         return Ok(outcome);

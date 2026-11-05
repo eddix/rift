@@ -1906,6 +1906,7 @@ mod tests {
 
     fn admitted(wid: WindowId, wsid: WindowServerId) -> WindowState {
         let mut state = WindowState::from(crate::sys::app::WindowInfo {
+            ax_identifier: None,
             has_native_tabs: false,
             is_standard: true,
             is_root: true,

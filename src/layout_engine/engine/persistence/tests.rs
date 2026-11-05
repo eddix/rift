@@ -35,6 +35,7 @@ fn live_state(window: WindowId) -> WindowState {
     WindowState {
         native_transient: false,
         info: WindowInfo {
+            ax_identifier: None,
             has_native_tabs: false,
             is_standard: true,
             is_root: true,
@@ -571,6 +572,7 @@ fn persistence_preserves_layouts_through_every_lifecycle() {
         w1,
         a,
         crate::model::WindowRuleContext {
+            ax_identifier: None,
             app_bundle_id: evidence(w1).app_id.as_deref(),
             app_name: None,
             window_title: title.as_deref(),

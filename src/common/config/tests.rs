@@ -1169,7 +1169,6 @@ fn replacing_shortcuts_is_atomic_and_scoped_to_the_reviewed_mode() {
     assert_eq!(reopened.binding_modes, source.binding_modes);
 }
 
-
 #[test]
 fn unmanaged_focus_commands_parse_from_key_bindings() {
     #[derive(Deserialize)]

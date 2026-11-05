@@ -146,7 +146,9 @@ pub enum WmCmd {
     ShowMissionControlCurrent,
     #[command(group = 5, label = "Dismiss overview", order = 43)]
     DismissMissionControl,
+    #[command(group = 6, label = "Toggle window palette", order = 61)]
     ToggleCommandPalette,
+    #[command(group = 6, label = "Toggle command palette", order = 62)]
     ToggleCommandPaletteCommands,
     #[command(group = 0, order = 11)]
     CloseWindow,

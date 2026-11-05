@@ -1,4 +1,4 @@
-use cgs::with_disabled_actions;
+use cgs::compositor::with_disabled_actions;
 use objc2::rc::Retained;
 use objc2_app_kit::NSColor;
 use objc2_core_foundation::{CFRetained, CGPoint, CGRect, CGSize};

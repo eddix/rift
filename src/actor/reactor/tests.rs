@@ -8690,10 +8690,11 @@ fn empty_active_space_membership_during_wake_race_does_not_blank_known_active_wi
 
     reactor.mark_test_window_visible_in_space(wsid, space);
 
-    reactor.space_state.active_window_spaces.clear();
+    crate::sys::window_server::set_space_window_list_for_connection_override(Some(vec![]));
     reactor.space_state.membership_complete = false;
     let active_windows = reactor.authoritative_active_space_windows();
     reactor.reconcile_authoritative_active_window_snapshot(active_windows, true, &[]);
+    crate::sys::window_server::set_space_window_list_for_connection_override(None);
 
     assert!(
         reactor.state.windows.is_window_visible(wsid),
@@ -13247,6 +13248,46 @@ struct UntiledFocusFixture {
     floating_server: WindowServerId,
     unmanaged: WindowId,
     unmanaged_server: WindowServerId,
+}
+
+#[test]
+fn externally_claimed_window_is_untiled_and_does_not_receive_layout_focus() {
+    let mut f = UntiledFocusFixture::new();
+    let window = f.tiled;
+    f.reactor
+        .claim_window(
+            window,
+            crate::model::window_store::ClaimOwner(901),
+            rift_protocol::WindowClaimFlags::empty(),
+        )
+        .unwrap();
+    assert!(f.reactor.state.windows.window(window).unwrap().is_admitted());
+    assert!(!f.reactor.state.windows.is_admitted(window));
+    let (tiled, untiled) = f.reactor.window_focus_groups_in_space(f.space);
+    assert!(!tiled.contains(&window));
+    assert!(untiled.contains(&window));
+
+    let outcome = f
+        .reactor
+        .dispatch_workflow(Event::WindowServerFocusChanged(window, f.space))
+        .unwrap();
+    assert!(outcome.layout_events.is_empty());
+    assert!(outcome.pre_layout_window_frame_writes.is_empty());
+    f.reactor.presentation_manager.projections.mark_dirty();
+    f.reactor.publish_desktop_snapshot();
+    let target = f
+        .reactor
+        .presentation_manager
+        .projections
+        .current()
+        .unwrap()
+        .state
+        .border_target
+        .unwrap();
+    assert_eq!(
+        target.kind,
+        crate::model::projection::BorderWindowKind::Unmanaged
+    );
 }
 
 impl UntiledFocusFixture {
