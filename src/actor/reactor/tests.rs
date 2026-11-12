@@ -11388,6 +11388,59 @@ fn shared_settings() -> crate::common::config::VirtualWorkspaceSettings {
 }
 
 #[test]
+fn personal_global_profile_keeps_five_workspaces_and_restores_external_misc() {
+    let config = Config::parse(include_str!("../../../config/eddix.toml")).unwrap();
+    assert_eq!(
+        config.virtual_workspaces.mode,
+        crate::common::config::WorkspaceMode::Global
+    );
+    assert!(config.virtual_workspaces.workspace_display_rules.is_empty());
+    let (mut apps, mut reactor, builtin, external) = two_displays(config.virtual_workspaces);
+    let ids: Vec<_> = reactor.layout_manager.layout_engine.workspaces().catalog().collect();
+    assert_eq!(ids.len(), 5);
+    let owners = |reactor: &Reactor| {
+        ids.iter()
+            .map(|id| reactor.layout_manager.layout_engine.workspaces()[*id].space)
+            .collect::<Vec<_>>()
+    };
+    assert_eq!(owners(&reactor), [
+        builtin, external, external, external, external
+    ]);
+    assert_eq!(
+        reactor.layout_manager.layout_engine.workspaces()[ids[3]].layout_mode(),
+        LayoutMode::Scrolling
+    );
+
+    let window = WindowId::new(1, 1);
+    reactor.handle_test_layout_command(LayoutCommand::MoveWindowToWorkspace {
+        workspace: WorkspaceSelector::Index(4),
+        follow: false,
+        window_id: Some(window.idx.get()),
+    });
+    apps.simulate_until_quiet(&mut reactor);
+    assert_eq!(reactor.state.windows.workspace_for_window(window), Some(ids[4]));
+
+    reactor.handle_event(space_state_event(vec![shared_left()], vec![Some(builtin)]));
+    apps.simulate_until_quiet(&mut reactor);
+    assert_eq!(owners(&reactor), [builtin; 5]);
+    assert_eq!(reactor.state.windows.workspace_for_window(window), Some(ids[4]));
+
+    reactor.handle_event(space_state_event(vec![shared_left(), shared_right()], vec![
+        Some(builtin),
+        Some(external),
+    ]));
+    apps.simulate_until_quiet(&mut reactor);
+    assert_eq!(owners(&reactor), [
+        builtin, external, external, external, external
+    ]);
+    assert_eq!(reactor.state.windows.workspace_for_window(window), Some(ids[4]));
+    assert_eq!(
+        reactor.layout_manager.layout_engine.workspaces().catalog().collect::<Vec<_>>(),
+        ids
+    );
+}
+
+#[test]
 fn native_return_waits_for_a_global_destination_without_losing_eviction() {
     use crate::layout_engine::systems::LayoutSystem;
     use crate::model::virtual_workspace::WorkspaceTransferReason;
@@ -13166,7 +13219,6 @@ fn presentation_inventory_tracks_visibility_without_forgetting_layout() {
         assert!(reactor.query_window_info(wid).is_none());
         assert!(!reactor.state.windows.contains_window(wid));
     }
-
 }
 
 #[test]

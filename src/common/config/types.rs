@@ -125,7 +125,7 @@ pub struct WorkspaceLayoutRule {
     pub workspace: WorkspaceSelector,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub layout: Option<LayoutMode>,
-    /// Ordered display UUIDs, names, or builtin/left/right/top/bottom selectors.
+    /// Ordered display UUIDs, names, or builtin/external/left/right/top/bottom selectors.
     /// The first eligible preference wins. Only applies when
     /// `mode = "global"`.
     #[serde(default, skip_serializing_if = "Option::is_none")]

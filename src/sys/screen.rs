@@ -104,6 +104,7 @@ pub fn resolve_display_preference<'a>(
                 && eligible(screen)
                 && match preference.as_str() {
                     "builtin" => screen.is_builtin,
+                    "external" => !screen.is_builtin,
                     "left" | "right" | "top" | "bottom" => true,
                     value => screen.display_uuid == value || screen.name.as_deref() == Some(value),
                 }
@@ -112,7 +113,9 @@ pub fn resolve_display_preference<'a>(
             let a_center = a.frame.mid();
             let b_center = b.frame.mid();
             let geometric = match preference.as_str() {
-                "left" => a_center.x.total_cmp(&b_center.x).then(a_center.y.total_cmp(&b_center.y)),
+                "left" | "external" => {
+                    a_center.x.total_cmp(&b_center.x).then(a_center.y.total_cmp(&b_center.y))
+                }
                 "right" => {
                     b_center.x.total_cmp(&a_center.x).then(a_center.y.total_cmp(&b_center.y))
                 }
@@ -127,7 +130,7 @@ pub fn resolve_display_preference<'a>(
         let mut count = 0;
         let target = matches.inspect(|_| count += 1).min_by(compare);
         if target.is_some() {
-            if count > 1 && !directional && preference != "builtin" {
+            if count > 1 && !directional && !matches!(preference.as_str(), "builtin" | "external") {
                 warn!(preference, "Workspace rule display is ambiguous; use a UUID");
             }
             return target;
@@ -855,6 +858,7 @@ mod test {
         for _ in 0..screens.len() {
             for (preferences, expected) in [
                 (vec!["builtin", "right"], Some("b")),
+                (vec!["external", "builtin"], Some("a")),
                 (vec!["missing", "right"], Some("c")),
                 (vec!["left"], Some("a")),
                 (vec!["right"], Some("c")),
@@ -878,6 +882,14 @@ mod test {
                     .unwrap()
                     .display_uuid,
                 "c"
+            );
+            assert!(resolve_display_preference(&values, &screens, |_| false).is_none());
+            let values = vec!["external".into(), "builtin".into()];
+            assert_eq!(
+                resolve_display_preference(&values, &screens, |s| s.is_builtin)
+                    .unwrap()
+                    .display_uuid,
+                "b"
             );
             assert!(resolve_display_preference(&values, &screens, |_| false).is_none());
             screens.rotate_left(1);

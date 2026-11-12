@@ -144,6 +144,28 @@ fn app_rules_parse_and_validate_ax_identifier_regex() {
 }
 
 #[test]
+fn app_rule_duplicates_include_ax_identifier_in_the_complete_matcher() {
+    let mut settings: VirtualWorkspaceSettings = toml::from_str(
+        r#"
+        app_rules = [
+            { app_id = "com.example.a", ax_role = "AXWindow", ax_identifier_regex = "^first-" },
+            { app_id = "com.example.a", ax_role = "AXWindow", ax_identifier_regex = "^second-" },
+            { app_id = "com.example.b", ax_role = "AXWindow", ax_identifier_regex = "^first-" },
+        ]
+        "#,
+    )
+    .unwrap();
+    assert!(settings.validate().is_empty());
+    settings.app_rules.push(settings.app_rules[0].clone());
+    assert!(
+        settings
+            .validate()
+            .iter()
+            .any(|issue| issue.contains("matches the same windows"))
+    );
+}
+
+#[test]
 fn app_rule_geometry_validation_rejects_invalid_values() {
     let mut settings = VirtualWorkspaceSettings::default();
     settings.app_rules.push(AppWorkspaceRule {

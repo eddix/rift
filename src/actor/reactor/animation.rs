@@ -2459,7 +2459,7 @@ mod tests {
     }
 
     #[test]
-    fn restated_space_snapshot_preserves_animation_but_new_revision_cancels_it() {
+    fn restated_space_snapshot_preserves_animation_until_presentation_changes() {
         use super::super::testing::*;
         use crate::actor::reactor::Event;
 
@@ -2482,7 +2482,11 @@ mod tests {
             .insert(wid, (reactor.app_manager.apps[&1].handle.clone(), frame));
         let control = Arc::clone(&sender.control);
         reactor.animation_tx = Some(sender);
-        for revision in [snapshot.revision, snapshot.revision.saturating_sub(1)] {
+        for revision in [
+            snapshot.revision,
+            snapshot.revision.saturating_sub(1),
+            snapshot.revision + 1,
+        ] {
             let mut restated = snapshot.clone();
             restated.revision = revision;
             reactor.handle_event(Event::SpaceStateChanged(restated));
@@ -2491,7 +2495,8 @@ mod tests {
                 receiver.commands.try_iter().all(|message| !matches!(message, Message::Stop(_)))
             );
         }
-        snapshot.revision += 1;
+        snapshot.revision += 2;
+        snapshot.screens[0].frame.size.width += 100.;
         reactor.handle_event(Event::SpaceStateChanged(snapshot));
         assert!(!control.lock().frames.contains_key(&wid));
         assert!(receiver.commands.try_iter().any(|message| matches!(message, Message::Stop(_))));

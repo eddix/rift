@@ -1636,7 +1636,9 @@ impl LayoutEngine {
     ) -> bool {
         // Layout admission cannot restore AX validity or explicit exclusions.
         if window_store.is_temporarily_unavailable(wid)
-            || window_store.window(wid).is_some_and(|window| window.manage_override == Some(false))
+            || window_store
+                .window(wid)
+                .is_some_and(|window| window.manage_override == Some(false))
         {
             return false;
         }
@@ -5129,8 +5131,11 @@ mod tests {
             LayoutEvent::windows_observed(source, window.pid, vec![info], None),
         );
         let _ = engine.handle_event(&mut store, LayoutEvent::WindowRemovedPreserveFloating(window));
-        let _ = engine.handle_event(&mut store, LayoutEvent::WindowAdded(destination, window));
         let workspace = engine.workspaces.active_workspace(destination).unwrap();
+        // Lifecycle additions now restore participation in the logical owner's space.
+        // A cross-display transfer updates ownership before emitting WindowAdded.
+        store.assign_window_to_workspace(window, workspace);
+        let _ = engine.handle_event(&mut store, LayoutEvent::WindowAdded(destination, window));
         let frames = engine.calculate_layout_for_workspace(
             &store,
             destination,

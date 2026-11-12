@@ -105,6 +105,7 @@ spacing = 4.0
 thickness = 24.0
 
 [virtual_workspaces]
+mode = "global"
 enabled = true
 default_workspace_count = 5
 auto_assign_windows = true
@@ -115,23 +116,15 @@ default_workspace = 0
 workspace_names = ["1(IM)", "2(Browser)", "3(Terminal)", "4(Agent)", "5(Misc)"]
 
 workspace_rules = [
-  { workspace = 3, layout = "scrolling" },
-]
-
-workspace_display_rules = [
-  { workspace = 0, display = "built_in" },
-  { workspace = 1, display = "external_primary" },
-  { workspace = 2, display = "external_primary" },
-  { workspace = 3, display = "external_primary" },
-  # Workspace 5 is intentionally unbound: it is the scratch workspace of
-  # whichever display currently owns the command context.
+  { workspace = 0, display = "builtin" },
+  { workspace = 1, display = ["external", "builtin"] },
+  { workspace = 2, display = ["external", "builtin"] },
+  { workspace = 3, layout = "scrolling", display = ["external", "builtin"] },
+  { workspace = 4, display = ["external", "builtin"] },
 ]
 
 app_rules = [
-  # Keep transient dialogs managed, but out of the tiling tree.
-  { ax_subrole = "AXDialog", floating = true },
-  { ax_subrole = "AXSystemDialog", floating = true },
-  { ax_role = "AXSheet", floating = true },
+  # Native dialogs, sheets and popups are excluded by upstream admission rules.
   { app_id = "com.volcengine.corplink", floating = true },
   { app_id = "com.apple.systempreferences", floating = true },
 

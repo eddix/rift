@@ -2010,7 +2010,10 @@ impl Reactor {
             }
             Event::WindowMinimized(wid) | Event::WindowDeminiaturized(wid) => {
                 if matches!(event, Event::WindowMinimized(_))
-                    && let Some(window_server_id) = self.state.windows.window(wid)
+                    && let Some(window_server_id) = self
+                        .state
+                        .windows
+                        .window(wid)
                         .filter(|window| !window.info.is_minimized)
                         .and_then(|window| window.info.sys_id)
                     && let Some(border_tx) = self.presentation_manager.border_tx.as_ref()

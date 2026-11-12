@@ -85,9 +85,13 @@ cp config/eddix.toml "$HOME/.config/rift/config.toml"
 ```
 
 Use `service restart` when updating an existing service. A fresh installation
-needs Accessibility permission. Display rules use `built_in` and
-`external_primary`, without machine-specific display UUIDs; workspace 5 remains
-an independent scratch workspace on each display.
+needs Accessibility permission. The profile uses global workspaces: workspace 1
+prefers the built-in display; workspaces 2–5 prefer an external display and fall
+back to the built-in display when none is available. Workspace 5 is one global
+Misc workspace. Placement uses upstream `workspace_rules.display` with portable
+`builtin` and `external` selectors. `external` selects the leftmost eligible
+external display, independent of its UUID or name. Explicit workspace moves
+override the preference until the workspace returns or the rule is reactivated.
 
 The focused-window border uses a separate color for each window type:
 

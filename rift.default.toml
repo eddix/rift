@@ -340,7 +340,8 @@ reapply_app_rules_on_title_change = false
 # Workspace rules: workspace is a zero-based index or name.
 # The last matching rule wins for each property independently.
 # - layout: "traditional", "bsp", "stack", "master_stack", "scrolling", or "floating".
-# - display: UUID, exact name, or lowercase builtin/left/right/top/bottom (global mode only).
+# - display: UUID, exact name, or lowercase builtin/external/left/right/top/bottom (global mode only).
+#   external selects the leftmost eligible external display, with UUID tie-breaking.
 #   A string is one preference; lists use the first eligible match, otherwise normal placement.
 #   builtin selects the Mac's built-in panel. Directions select eligible screen-center extremes,
 #   so preferences after a direction usually won't be reached.

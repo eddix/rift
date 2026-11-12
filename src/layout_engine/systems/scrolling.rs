@@ -2247,7 +2247,7 @@ impl LayoutSystem for ScrollingLayoutSystem {
         let Some(state) = self.layouts.get_mut(layout) else {
             return;
         };
-        state.mutate(&self.settings, |state| {
+        state.mutate(&self.settings, &self.inactive, |state| {
             for column in &mut state.columns {
                 column.width = ColumnWidth::Default;
                 column.height_weights.fill(1.0);
