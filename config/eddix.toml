@@ -136,6 +136,7 @@ app_rules = [
   { app_id = "com.tencent.imamac", workspace = 0 },
 
   # Workspace 2: web.
+  { app_id = "dev.kite.browser", workspace = 1 },
   { app_id = "company.thebrowser.Browser", ax_identifier_regex = "^littleBrowserWindow-", workspace = 1, manage = true },
   { app_id = "company.thebrowser.Browser", workspace = 1 },
 
